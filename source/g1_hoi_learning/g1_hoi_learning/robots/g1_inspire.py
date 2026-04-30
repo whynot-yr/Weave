@@ -30,6 +30,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
         fix_base=False,
         replace_cylinders_with_capsules=True,
         force_usd_conversion=True,
+        # Setting True makes the URDF importer parse the <mimic> tags into PhysX gear constraints.
+        convert_mimic_joints_to_normal_joints=True,
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -183,21 +185,15 @@ G1_INSPIRE_CFG = ArticulationCfg(
                 ".*_wrist_yaw_joint": ARMATURE_4010,
             },
         ),
-        # Inspire hand actuators
+        # Inspire hand passive joints.
         "fingers": ImplicitActuatorCfg(
             joint_names_expr=[
                 ".*_thumb_proximal_yaw_joint",
                 ".*_thumb_proximal_pitch_joint",
-                ".*_thumb_intermediate_joint",
-                ".*_thumb_distal_joint",
                 ".*_index_proximal_joint",
-                ".*_index_intermediate_joint",
                 ".*_middle_proximal_joint",
-                ".*_middle_intermediate_joint",
                 ".*_ring_proximal_joint",
-                ".*_ring_intermediate_joint",
                 ".*_pinky_proximal_joint",
-                ".*_pinky_intermediate_joint",
             ],
             effort_limit_sim=1.0,
             velocity_limit_sim=5.0,

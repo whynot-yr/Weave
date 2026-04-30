@@ -123,8 +123,8 @@ class ActionsCfg:
 
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
-        # joint_names=["^(?!.*(thumb|index|middle|ring|pinky)).*$"]
-        joint_names=[".*"]
+        # Exclude passive Inspire hand joints (intermediate/distal)
+        joint_names=["^(?!.*(intermediate|distal)).*$"],
     )
 
 
