@@ -158,6 +158,7 @@ class ObservationsCfg:
         # object state (current + future)
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
+        object_surface_points_b = ObsTerm(func=mdp.object_surface_points_b, params={"command_name": "motion"})
         # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
@@ -193,6 +194,7 @@ class ObservationsCfg:
         # object state (current + future)
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
+        object_surface_points_b = ObsTerm(func=mdp.object_surface_points_b, params={"command_name": "motion"})
         # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)

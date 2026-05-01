@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from isaaclab.envs import ManagerBasedEnv
-from isaaclab.utils.math import matrix_from_quat, subtract_frame_transforms
+from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, subtract_frame_transforms, transform_points
 
 from .commands import MotionCommand
 
@@ -207,6 +207,26 @@ def motion_future_obj_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Te
         command.future_obj_quat_w,
     )
     return pos_b.reshape(env.num_envs, -1)
+
+
+def object_surface_points_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Object surface points expressed in robot anchor frame. (num_envs, P*3)"""
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    pts_local = command.motion.surface  # (P, 3) on device
+    P = pts_local.shape[0]
+    num_envs = env.num_envs
+    # local -> world via transform_points (R(obj_quat) @ pts_local + obj_pos)
+    pts_w = transform_points(
+        pts_local.unsqueeze(0).expand(num_envs, -1, -1),
+        pos=command.obj_pos_w,
+        quat=command.obj_quat_w,
+    )
+    # world -> anchor: R(anchor_quat)^T @ (pts_w - anchor_pos)
+    pts_b = quat_apply_inverse(
+        command.robot_anchor_quat_w[:, None, :].expand(-1, P, -1),
+        pts_w - command.robot_anchor_pos_w[:, None, :],
+    )
+    return pts_b.reshape(num_envs, -1)
 
 
 def motion_future_obj_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:

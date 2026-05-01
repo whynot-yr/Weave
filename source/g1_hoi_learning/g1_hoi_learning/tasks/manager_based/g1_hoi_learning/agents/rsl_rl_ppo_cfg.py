@@ -25,11 +25,11 @@ class SimBaActorCriticCfg(RslRlPpoActorCriticCfg):
     activation: str = "relu"
 
     # SimBa-specific
-    actor_hidden_dim: int = 1024
-    critic_hidden_dim: int = 1024
+    actor_hidden_dim: int = 2048
+    critic_hidden_dim: int = 2048
     actor_num_blocks: int = 2
     critic_num_blocks: int = 2
-    expansion: int = 2
+    expansion: int = 1
 
 
 @configclass
@@ -42,11 +42,11 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         init_noise_std=0.5,
         actor_obs_normalization=True,
         critic_obs_normalization=True,
-        actor_hidden_dim=1024,
-        critic_hidden_dim=1024,
+        actor_hidden_dim=2048,
+        critic_hidden_dim=2048,
         actor_num_blocks=2,
         critic_num_blocks=2,
-        expansion=2,
+        expansion=1,
     )
     algorithm = MuonPpoAlgorithmCfg(
         value_loss_coef=1.0,

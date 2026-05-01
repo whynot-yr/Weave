@@ -84,3 +84,12 @@ tests/
 
 # worklogs
 worklog.md
+
+# data
+data/
+
+# objects assets — only python configs are tracked
+source/g1_hoi_learning/g1_hoi_learning/objects/*
+!source/g1_hoi_learning/g1_hoi_learning/objects/__init__.py
+!source/g1_hoi_learning/g1_hoi_learning/objects/object_cfg.py
+

@@ -271,6 +271,7 @@ def process_motion(sim: SimulationContext, scene: InteractiveScene, joint_indice
 
     log = {
         "fps": [args_cli.output_fps],
+        "object_name": data["object"]["name"],
         "joint_pos": [],
         "joint_vel": [],
         "body_pos_w": [],
@@ -342,7 +343,7 @@ def process_motion(sim: SimulationContext, scene: InteractiveScene, joint_indice
 
         if reset_flag:
             for k in list(log.keys()):
-                if k != "fps":
+                if k not in ("fps", "object_name"):
                     log[k] = np.stack(log[k], axis=0)
             print("[INFO]: Motion processed successfully")
             break
