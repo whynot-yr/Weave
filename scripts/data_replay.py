@@ -9,6 +9,8 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from dataclasses import MISSING
+
 import numpy as np
 
 from isaaclab.app import AppLauncher
@@ -32,7 +34,7 @@ import torch
 import joblib
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import AssetBaseCfg
+from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import SimulationContext
@@ -41,7 +43,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul, quat_slerp, quat_from_matrix, quat_unique
 
 from g1_hoi_learning.robots.g1_inspire import G1_INSPIRE_CFG
-from g1_hoi_learning.objects.object_cfg import CLOTHESSTAND_CFG
+from g1_hoi_learning.objects.object_cfg import OBJECT_CFG_BY_NAME
 
 # Joint ordering from pytorch-kinematics URDF parse
 G1_JOINT_NAMES = [
@@ -117,7 +119,7 @@ class ReplaySceneCfg(InteractiveSceneCfg):
 
     robot = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    obj = CLOTHESSTAND_CFG.replace(prim_path="{ENV_REGEX_NS}/Object")
+    obj: RigidObjectCfg = MISSING   # set in main() based on pkl's object_name
 
     contact_sensor = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Object",
@@ -352,11 +354,18 @@ def process_motion(sim: SimulationContext, scene: InteractiveScene, joint_indice
 
 
 def main():
+    # Load retargeted data first to know which object cfg to spawn
+    print(f"[INFO]: Loading motion from {args_cli.input_file}")
+    data = joblib.load(args_cli.input_file)
+    object_name = data["object"]["name"]
+    print(f"[INFO]: Object detected: {object_name}")
+
     sim_cfg = sim_utils.SimulationCfg(device=args_cli.device)
     sim_cfg.dt = 1.0 / args_cli.output_fps
     sim = SimulationContext(sim_cfg)
 
     scene_cfg = ReplaySceneCfg(num_envs=1, env_spacing=2.0)
+    scene_cfg.obj = OBJECT_CFG_BY_NAME[object_name].replace(prim_path="{ENV_REGEX_NS}/Object")
     scene = InteractiveScene(scene_cfg)
 
     sim.reset()
@@ -366,10 +375,6 @@ def main():
     robot = scene["robot"]
 
     joint_indices, _ = robot.find_joints(G1_JOINT_NAMES, preserve_order=True)
-
-    # Load retargeted data
-    print(f"[INFO]: Loading motion from {args_cli.input_file}")
-    data = joblib.load(args_cli.input_file)
 
     # Reorder contact labels from pkl (pytorch-kinematics order) to robot body order
     pk_body_names = {name: i for i, name in enumerate(data["link_names"])}

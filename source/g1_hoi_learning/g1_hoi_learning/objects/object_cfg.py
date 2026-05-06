@@ -41,3 +41,19 @@ TRASHCAN_CFG = _object_cfg(TRASHCAN_USD_PATH)
 TRIPOD_CFG = _object_cfg(TRIPOD_USD_PATH)
 WHITECHAIR_CFG = _object_cfg(WHITECHAIR_USD_PATH)
 WOODCHAIR_CFG = _object_cfg(WOODCHAIR_USD_PATH)
+
+OBJECT_CFG_BY_NAME = {
+    "clothesstand": CLOTHESSTAND_CFG,
+    "floorlamp":    FLOORLAMP_CFG,
+    "largebox":     LARGEBOX_CFG,
+    "largetable":   LARGETABLE_CFG,
+    "monitor":      MONITOR_CFG,
+    "plasticbox":   PLASTICBOX_CFG,
+    "smallbox":     SMALLBOX_CFG,
+    "smalltable":   SMALLTABLE_CFG,
+    "suitcase":     SUITCASE_CFG,
+    "trashcan":     TRASHCAN_CFG,
+    "tripod":       TRIPOD_CFG,
+    "whitechair":   WHITECHAIR_CFG,
+    "woodchair":    WOODCHAIR_CFG,
+}

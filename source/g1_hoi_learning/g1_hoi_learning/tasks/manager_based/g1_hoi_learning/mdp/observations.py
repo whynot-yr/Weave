@@ -209,24 +209,33 @@ def motion_future_obj_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Te
     return pos_b.reshape(env.num_envs, -1)
 
 
-def object_surface_points_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Object surface points expressed in robot anchor frame. (num_envs, P*3)"""
+def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Per-body vector from each robot body to its nearest point on the object surface,
+    expressed in the robot anchor frame. (num_envs, num_bodies * 3)
+    """
     command: MotionCommand = env.command_manager.get_term(command_name)
-    pts_local = command.motion.surface  # (P, 3) on device
-    P = pts_local.shape[0]
+    pts_local = command.motion.surface  # (P, 3) object frame
     num_envs = env.num_envs
-    # local -> world via transform_points (R(obj_quat) @ pts_local + obj_pos)
+    # surface points: object frame -> world
     pts_w = transform_points(
         pts_local.unsqueeze(0).expand(num_envs, -1, -1),
         pos=command.obj_pos_w,
         quat=command.obj_quat_w,
+    )  # (num_envs, P, 3)
+    body_pos_w = command.robot_body_pos_w   # (num_envs, B, 3)
+    B = body_pos_w.shape[1]
+    # nearest point per body
+    dist = torch.cdist(body_pos_w, pts_w)             # (num_envs, B, P)
+    idx = dist.argmin(dim=-1)                          # (num_envs, B)
+    nearest_w = pts_w.gather(1, idx.unsqueeze(-1).expand(-1, -1, 3))  # (num_envs, B, 3)
+    # vector body -> nearest point, in world
+    diff_w = nearest_w - body_pos_w
+    # rotate into anchor frame
+    diff_b = quat_apply_inverse(
+        command.robot_anchor_quat_w[:, None, :].expand(-1, B, -1),
+        diff_w,
     )
-    # world -> anchor: R(anchor_quat)^T @ (pts_w - anchor_pos)
-    pts_b = quat_apply_inverse(
-        command.robot_anchor_quat_w[:, None, :].expand(-1, P, -1),
-        pts_w - command.robot_anchor_pos_w[:, None, :],
-    )
-    return pts_b.reshape(num_envs, -1)
+    return diff_b.reshape(num_envs, -1)
 
 
 def motion_future_obj_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:

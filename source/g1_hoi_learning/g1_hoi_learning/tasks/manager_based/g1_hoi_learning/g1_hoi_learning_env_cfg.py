@@ -1,3 +1,7 @@
+from dataclasses import MISSING
+
+import numpy as np
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -17,7 +21,7 @@ from .mdp.commands import MotionCommandCfg
 # Pre-defined configs
 ##
 from g1_hoi_learning.robots.g1_inspire import G1_INSPIRE_CFG  # isort:skip
-from g1_hoi_learning.objects.object_cfg import CLOTHESSTAND_CFG  # isort:skip
+from g1_hoi_learning.objects.object_cfg import OBJECT_CFG_BY_NAME  # isort:skip
 
 
 ##
@@ -36,7 +40,7 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    object: RigidObjectCfg = CLOTHESSTAND_CFG.replace(prim_path="{ENV_REGEX_NS}/Object")
+    object: RigidObjectCfg = MISSING   # set in G1HoiLearningEnvCfg.__post_init__ from motion_file's object_name
 
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
@@ -158,7 +162,7 @@ class ObservationsCfg:
         # object state (current + future)
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
-        object_surface_points_b = ObsTerm(func=mdp.object_surface_points_b, params={"command_name": "motion"})
+        object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
         # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
@@ -194,7 +198,7 @@ class ObservationsCfg:
         # object state (current + future)
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
-        object_surface_points_b = ObsTerm(func=mdp.object_surface_points_b, params={"command_name": "motion"})
+        object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
         # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
@@ -335,6 +339,11 @@ class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self) -> None:
         """Post initialization."""
+        # Pick scene object based on motion file's object_name (so train/play match the motion).
+        motion_data = np.load(self.commands.motion.motion_file, allow_pickle=True)
+        object_name = str(motion_data["object_name"])
+        self.scene.object = OBJECT_CFG_BY_NAME[object_name].replace(prim_path="{ENV_REGEX_NS}/Object")
+
         self.decimation = 4
         self.episode_length_s = 10.0
         self.viewer.eye = (3.0, 3.0, 2.0)
