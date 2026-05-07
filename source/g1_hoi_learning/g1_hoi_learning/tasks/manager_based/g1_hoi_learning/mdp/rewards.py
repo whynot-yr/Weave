@@ -139,16 +139,18 @@ class contact_reward(ManagerTermBase):
         command_name: str,
         sensor_name: str,
         hand_body_names: list[str],
-        threshold: float = 1.0,
+        saturate_force: float = 5.0,
     ) -> torch.Tensor:
         command: MotionCommand = env.command_manager.get_term(command_name)
         sensor = env.scene[sensor_name]
 
         ref_label = command.ref_contact_label[:, self.hand_idx]              # (num_envs, num_hand)
         forces = sensor.data.force_matrix_w[:, 0, self.hand_idx, :]           # (num_envs, num_hand, 3)
-        sim_contact = (forces.norm(dim=-1) > threshold).float()                # (num_envs, num_hand)
+        sim_strength = (forces.norm(dim=-1) / saturate_force).clamp(0, 1)     # (num_envs, num_hand)
 
-        # score per body: ref * (2*sim - 1) maps to [-1, 1], then shift to [0, 1]
-        score = (ref_label * (2.0 * sim_contact - 1.0) + 1.0) / 2.0
-        mask = (ref_label != 0).float()
+        target = (ref_label > 0).float()                                      # 该接触 = 1
+        mask = (ref_label != 0).float()                                       # 非 neutral
+
+        err = (target - sim_strength).abs() * mask
+        score = 1.0 - err
         return (score * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
