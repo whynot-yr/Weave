@@ -15,6 +15,12 @@ _COMMON_RIGID_PROPS = sim_utils.RigidBodyPropertiesCfg(
 
 _COMMON_MASS_PROPS = sim_utils.MassPropertiesCfg(density=200.0)
 
+_COMMON_VISUAL_MATERIAL = sim_utils.PreviewSurfaceCfg(
+    diffuse_color=(0.85, 0.45, 0.20),   # warm orange
+    roughness=0.6,
+    metallic=0.0,
+)
+
 
 def _object_cfg(usd_path: str) -> RigidObjectCfg:
     return RigidObjectCfg(
@@ -24,6 +30,7 @@ def _object_cfg(usd_path: str) -> RigidObjectCfg:
             activate_contact_sensors=True,
             mass_props=_COMMON_MASS_PROPS,
             rigid_props=_COMMON_RIGID_PROPS,
+            visual_material=_COMMON_VISUAL_MATERIAL,
         ),
     )
 

@@ -1,5 +1,6 @@
 import os
 from collections.abc import Sequence
+from dataclasses import MISSING
 
 import numpy as np
 import torch
@@ -387,7 +388,7 @@ class MotionCommandCfg(CommandTermCfg):
     rsi: bool = True
     """Random State Initialization: start from random frame (training) or frame 0 (evaluation)."""
 
-    motion_file: str = "./data/example_data/smallbox.npz"
+    motion_file: str = MISSING
 
     pose_range: dict[str, tuple[float, float]] = {}
     velocity_range: dict[str, tuple[float, float]] = {}
