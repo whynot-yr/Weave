@@ -1,13 +1,3 @@
-"""Custom algorithms for g1_hoi_learning.
+"""Per-algorithm subpackages — networks, algorithm, runner under one namespace."""
 
-Importing this package registers them into rsl_rl's runner namespace,
-so ``OnPolicyRunner`` can resolve them via ``class_name`` in the agent cfg.
-"""
-
-import rsl_rl.runners.on_policy_runner as _opr
-
-from .muon_ppo import MuonPPO
-
-_opr.MuonPPO = MuonPPO
-
-__all__ = ["MuonPPO"]
+from . import ppo  # noqa: F401  (registers SimBaActorCritic, MuonPPO into rsl_rl's namespace)
