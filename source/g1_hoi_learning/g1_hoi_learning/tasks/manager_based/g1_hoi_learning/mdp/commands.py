@@ -387,7 +387,7 @@ class MotionCommandCfg(CommandTermCfg):
     rsi: bool = True
     """Random State Initialization: start from random frame (training) or frame 0 (evaluation)."""
 
-    motion_file: str = ""    # must be set via CLI override; empty string is treated as missing
+    motion_file: str = ""
 
     pose_range: dict[str, tuple[float, float]] = {}
     velocity_range: dict[str, tuple[float, float]] = {}
