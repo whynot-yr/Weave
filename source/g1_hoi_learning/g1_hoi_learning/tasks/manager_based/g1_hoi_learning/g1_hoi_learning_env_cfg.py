@@ -261,6 +261,7 @@ class RewardsCfg:
             "command_name": "motion",
             "sensor_name": "contact_sensor",
             "hand_body_names": ["L_.*", "R_.*"],
+            "saturate_force": 5.0,
         },
     )
     # regularization

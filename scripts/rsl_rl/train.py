@@ -38,6 +38,8 @@ parser.add_argument(
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
+# default to headless mode for training; pass --no-headless or override with --headless False to enable GUI
+parser.set_defaults(headless=True)
 args_cli, hydra_args = parser.parse_known_args()
 
 # always enable cameras to record video

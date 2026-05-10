@@ -1,0 +1,117 @@
+# @package _global_
+#
+# Usage:
+#   python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 --headless \
+#       --config-dir ./configs --config-name train
+#
+# Override anything inline:
+#   ... --config-name train env.scene.num_envs=2048 agent.max_iterations=500
+
+defaults:
+  - G1-Inspire-HOI-v0
+  - _self_
+
+# =============================================================================
+# Environment
+# =============================================================================
+
+env:
+  scene:
+    num_envs: 4096
+
+  commands:
+    motion:
+      motion_file: ./data/example_data/smallbox.npz
+      rsi: true
+      joint_position_range: [-0.1, 0.1]
+      pose_range:
+        x: [-0.05, 0.05]
+        y: [-0.05, 0.05]
+        z: [-0.01, 0.01]
+        roll: [-0.1, 0.1]
+        pitch: [-0.1, 0.1]
+        yaw: [-0.2, 0.2]
+      velocity_range:
+        x: [-0.5, 0.5]
+        y: [-0.5, 0.5]
+        z: [-0.2, 0.2]
+        roll: [-0.52, 0.52]
+        pitch: [-0.52, 0.52]
+        yaw: [-0.78, 0.78]
+
+  # ---- reward weights & params ----
+  rewards:
+    motion_anchor_pos:    { weight: 1.0, params: { command_name: motion, std: 0.3  } }
+    motion_anchor_ori:    { weight: 1.0, params: { command_name: motion, std: 0.4  } }
+    motion_body_pos:      { weight: 1.0, params: { command_name: motion, std: 0.3  } }
+    motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4  } }
+    motion_body_lin_vel:  { weight: 1.0, params: { command_name: motion, std: 1.0  } }
+    motion_body_ang_vel:  { weight: 1.0, params: { command_name: motion, std: 3.14 } }
+    object_pos:           { weight: 1.0, params: { command_name: motion, std: 0.3  } }
+    object_ori:           { weight: 1.0, params: { command_name: motion, std: 0.4  } }
+    contact:
+      weight: 1.0
+      params:
+        command_name: motion
+        sensor_name: contact_sensor
+        hand_body_names: ["L_.*", "R_.*"]
+        saturate_force: 5.0
+    action_rate_l2:       { weight: -0.1 }
+    joint_limit:          { weight: -10.0 }
+
+  # ---- termination thresholds ----
+  terminations:
+    anchor_pos:    { params: { command_name: motion, threshold: 0.25 } }
+    anchor_ori:    { params: { command_name: motion, threshold: 0.8  } }
+    object_pos:    { params: { command_name: motion, threshold: 0.25 } }
+    object_ori:    { params: { command_name: motion, threshold: 0.8  } }
+    ee_body_pos:
+      params:
+        command_name: motion
+        threshold: 0.25
+        body_names:
+          - left_ankle_roll_link
+          - right_ankle_roll_link
+          - left_wrist_yaw_link
+          - right_wrist_yaw_link
+    bad_contact:
+      params:
+        command_name: motion
+        sensor_name: contact_sensor
+        hand_body_names: ["L_.*", "R_.*"]
+        max_lost_frames: 20
+
+# =============================================================================
+# Agent (PPO + Muon + SimBa)
+# =============================================================================
+
+agent:
+  experiment_name: g1_inspire_hoi
+  num_steps_per_env: 32
+  max_iterations: 100000
+  save_interval: 100
+
+  policy:
+    init_noise_std: 0.5
+    actor_hidden_dim: 2048
+    critic_hidden_dim: 2048
+    actor_num_blocks: 2
+    critic_num_blocks: 2
+    expansion: 1
+    actor_obs_normalization: true
+    critic_obs_normalization: true
+
+  algorithm:
+    learning_rate: 1.0e-3
+    schedule: adaptive
+    desired_kl: 0.01
+    entropy_coef: 5.0e-4
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    gamma: 0.99
+    lam: 0.95
+    clip_param: 0.2
+    use_clipped_value_loss: true
+    value_loss_coef: 1.0
+    max_grad_norm: 1.0
+    weight_decay: 0.01
