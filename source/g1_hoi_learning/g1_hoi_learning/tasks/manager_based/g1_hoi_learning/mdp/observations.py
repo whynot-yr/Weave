@@ -214,14 +214,10 @@ def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Ten
     expressed in the robot anchor frame. (num_envs, num_bodies * 3)
     """
     command: MotionCommand = env.command_manager.get_term(command_name)
-    pts_local = command.motion.surface  # (P, 3) object frame
-    num_envs = env.num_envs
+    # per-env surface points: pick this env's object's surface from (N, P, 3)
+    pts_local = command.motion.surface[command.env_object_ids]    # (num_envs, P, 3) object frame
     # surface points: object frame -> world
-    pts_w = transform_points(
-        pts_local.unsqueeze(0).expand(num_envs, -1, -1),
-        pos=command.obj_pos_w,
-        quat=command.obj_quat_w,
-    )  # (num_envs, P, 3)
+    pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
     body_pos_w = command.robot_body_pos_w   # (num_envs, B, 3)
     B = body_pos_w.shape[1]
     # nearest point per body
@@ -235,7 +231,7 @@ def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Ten
         command.robot_anchor_quat_w[:, None, :].expand(-1, B, -1),
         diff_w,
     )
-    return diff_b.reshape(num_envs, -1)
+    return diff_b.reshape(env.num_envs, -1)
 
 
 def motion_future_obj_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:

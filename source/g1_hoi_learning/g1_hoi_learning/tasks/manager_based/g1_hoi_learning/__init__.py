@@ -6,6 +6,8 @@
 import gymnasium as gym
 import numpy as np
 
+import isaaclab.sim as sim_utils
+from isaaclab.assets import RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnv
 
 from g1_hoi_learning.objects.object_cfg import OBJECT_CFG_BY_NAME
@@ -14,17 +16,36 @@ from . import agents
 
 
 def _make_env(cfg, **kwargs):
-    """Resolve scene.object from motion_file's object_name, then construct the env.
+    """Resolve scene.object from motion_files' object_names.
+
+    Builds a MultiAssetSpawnerCfg(random_choice=False) so envs are assigned
+    objects in round-robin order: env i -> motion_files[i % N].
+    Forces replicate_physics=False (required by IsaacLab when spawning
+    heterogeneous assets across envs).
     """
-    motion_file = cfg.commands.motion.motion_file
-    if not motion_file:
-        raise ValueError(
-            "commands.motion.motion_file must be set. Pass it via Hydra CLI override:\n"
-            "  env.commands.motion.motion_file=./data/example_data/smallbox.npz"
-        )
-    object_name = str(np.load(motion_file, allow_pickle=True)["object_name"])
-    cfg.scene.object = OBJECT_CFG_BY_NAME[object_name].replace(prim_path="{ENV_REGEX_NS}/Object")
-    print(f"[INFO]: Resolved scene.object = {object_name} (from {motion_file})")
+    motion_files = cfg.commands.motion.motion_files
+
+    # collect per-file object names + per-object spawn cfgs
+    object_names: list[str] = []
+    assets_spawn_cfg: list[sim_utils.SpawnerCfg] = []
+    for f in motion_files:
+        name = str(np.load(f, allow_pickle=True)["object_name"])
+        if name not in OBJECT_CFG_BY_NAME:
+            raise KeyError(f"Unknown object_name '{name}' from {f}; not in OBJECT_CFG_BY_NAME")
+        object_names.append(name)
+        assets_spawn_cfg.append(OBJECT_CFG_BY_NAME[name].spawn)
+
+    cfg.scene.object = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Object",
+        spawn=sim_utils.MultiAssetSpawnerCfg(
+            assets_cfg=assets_spawn_cfg,
+            random_choice=False,
+            activate_contact_sensors=True,
+        ),
+    )
+    cfg.scene.replicate_physics = False
+
+    print(f"[INFO]: Resolved scene.object across {len(object_names)} object(s): {object_names}")
     return ManagerBasedRLEnv(cfg=cfg, **kwargs)
 
 

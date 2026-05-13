@@ -1,8 +1,26 @@
+"""
+Multi-motion command term: holds a buffer of N motions and tracks
+which (motion_id, local_t) each env is currently at.
+
+Memory layout::
+
+    buffer (TensorClass, batch_size=[sum_T])
+      motion 0 frames | motion 1 frames | ... | motion N-1 frames
+      [0..T0-1]       | [T0..T0+T1-1]   |     | [...sum_T-1]
+
+    motion_starts: (N+1,)  cumulative start offsets
+    motion_lengths: (N,)   per-motion length
+
+Each env carries (env_object_ids[i], time_steps[i]). Frame access is via
+``buffer[motion_starts[env_object_ids] + time_steps]``.
+"""
+
 import os
 from collections.abc import Sequence
 
 import numpy as np
 import torch
+from tensordict import TensorClass
 
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
@@ -14,33 +32,108 @@ from isaaclab.utils.math import quat_error_magnitude, quat_from_euler_xyz, quat_
 
 from g1_hoi_learning.objects import ASSET_DIR
 
+
+# ----------------------------------------------------------------------- TensorClass
+
+class MotionData(TensorClass):
+    """
+    Per-frame motion state. 
+    Used both as the flat buffer (batch_size=[sum_T])
+    and as a per-env / per-env-per-offset gather (batch_size=[num_envs] or
+    [num_envs, num_offsets]).
+    """
+
+    motion_id:        torch.Tensor   # (..., ) long  — which motion this frame belongs to
+    step:             torch.Tensor   # (..., ) long  — local step within its motion
+    joint_pos:        torch.Tensor   # (..., 53)
+    joint_vel:        torch.Tensor   # (..., 53)
+    body_pos_w:       torch.Tensor   # (..., 54, 3)
+    body_quat_w:      torch.Tensor   # (..., 54, 4)
+    body_lin_vel_w:   torch.Tensor   # (..., 54, 3)
+    body_ang_vel_w:   torch.Tensor   # (..., 54, 3)
+    object_pos_w:     torch.Tensor   # (..., 3)
+    object_quat_w:    torch.Tensor   # (..., 4)
+    object_lin_vel_w: torch.Tensor   # (..., 3)
+    object_ang_vel_w: torch.Tensor   # (..., 3)
+    contact_label:    torch.Tensor   # (..., 54)
+
+
+# ----------------------------------------------------------------------- MotionLoader
+
 class MotionLoader:
-    def __init__(self, motion_file: str, device: str = "cpu"):
-        assert os.path.isfile(motion_file), f"Invalid file path: {motion_file}"
-        data = np.load(motion_file, allow_pickle=True)
+    def __init__(self, motion_files: list[str], device: str | torch.device):
+        assert len(motion_files) > 0, "motion_files must be non-empty"
+        for f in motion_files:
+            assert os.path.isfile(f), f"motion file not found: {f}"
 
-        self.fps = int(data["fps"][0])
-        self.joint_pos = torch.tensor(data["joint_pos"], dtype=torch.float32, device=device)
-        self.joint_vel = torch.tensor(data["joint_vel"], dtype=torch.float32, device=device)
-        self._body_pos_w = torch.tensor(data["body_pos_w"], dtype=torch.float32, device=device)
-        self._body_quat_w = torch.tensor(data["body_quat_w"], dtype=torch.float32, device=device)
-        self._body_lin_vel_w = torch.tensor(data["body_lin_vel_w"], dtype=torch.float32, device=device)
-        self._body_ang_vel_w = torch.tensor(data["body_ang_vel_w"], dtype=torch.float32, device=device)
-        self.time_step_total = self.joint_pos.shape[0]
+        per_object = [np.load(f, allow_pickle=True) for f in motion_files]
+        self.num_objects = len(per_object)
+        self.fps = int(per_object[0]["fps"][0])
 
-        # Object trajectory
-        self.object_pos_w = torch.tensor(data["object_pos_w"], dtype=torch.float32, device=device)
-        self.object_quat_w = torch.tensor(data["object_quat_w"], dtype=torch.float32, device=device)
-        self.object_lin_vel_w = torch.tensor(data["object_lin_vel_w"], dtype=torch.float32, device=device)
-        self.object_ang_vel_w = torch.tensor(data["object_ang_vel_w"], dtype=torch.float32, device=device)
+        # ----- per-motion length and cumulative starts -----
+        lengths = torch.tensor(
+            [int(d["joint_pos"].shape[0]) for d in per_object],
+            dtype=torch.long, device=device,
+        )                                                       # (N,)
+        starts = torch.cat([
+            torch.zeros(1, dtype=torch.long, device=device),
+            lengths.cumsum(0),
+        ])                                                      # (N+1,)
+        sum_T = int(starts[-1].item())
+        self.motion_lengths = lengths
+        self.motion_starts  = starts
 
-        # Contact labels (T, num_bodies) in robot body order
-        self.contact_label = torch.tensor(data["contact_label"], dtype=torch.float32, device=device)
+        # ----- per-frame motion_id and step -----
+        motion_id = torch.cat([
+            torch.full((int(L.item()),), i, dtype=torch.long, device=device)
+            for i, L in enumerate(lengths)
+        ])
+        step = torch.cat([
+            torch.arange(int(L.item()), dtype=torch.long, device=device)
+            for L in lengths
+        ])
 
-        object_name = str(data["object_name"])
-        surface_path = os.path.join(ASSET_DIR, object_name, "surface.npy")
-        self.surface = torch.tensor(np.load(surface_path), dtype=torch.float32, device=device)
+        # ----- flat-concat each per-frame field -----
+        def _flat(key, dtype=torch.float32):
+            return torch.cat(
+                [torch.tensor(d[key], dtype=dtype, device=device) for d in per_object],
+                dim=0,
+            )
 
+        self.buffer = MotionData(
+            motion_id=motion_id,
+            step=step,
+            joint_pos        =_flat("joint_pos"),
+            joint_vel        =_flat("joint_vel"),
+            body_pos_w       =_flat("body_pos_w"),
+            body_quat_w      =_flat("body_quat_w"),
+            body_lin_vel_w   =_flat("body_lin_vel_w"),
+            body_ang_vel_w   =_flat("body_ang_vel_w"),
+            object_pos_w     =_flat("object_pos_w"),
+            object_quat_w    =_flat("object_quat_w"),
+            object_lin_vel_w =_flat("object_lin_vel_w"),
+            object_ang_vel_w =_flat("object_ang_vel_w"),
+            contact_label    =_flat("contact_label"),
+            batch_size=[sum_T],
+        )
+
+        # ----- per-object surface points + names -----
+        self.object_names = [str(d["object_name"]) for d in per_object]
+        self.surface = torch.stack([
+            torch.tensor(
+                np.load(os.path.join(ASSET_DIR, name, "surface.npy")),
+                dtype=torch.float32, device=device,
+            )
+            for name in self.object_names
+        ])                                                      # (N, P, 3)
+
+    def get_frames(self, motion_ids: torch.Tensor, local_t: torch.Tensor) -> MotionData:
+        """Gather frames for arbitrary (motion_ids, local_t)."""
+        global_idx = self.motion_starts[motion_ids] + local_t
+        return self.buffer[global_idx]
+
+
+# ----------------------------------------------------------------------- MotionCommand
 
 class MotionCommand(CommandTerm):
     cfg: "MotionCommandCfg"
@@ -54,99 +147,153 @@ class MotionCommand(CommandTerm):
 
         super().__init__(cfg, env)
 
-        self.motion = MotionLoader(self.cfg.motion_file, device=self.device)
+        self.motion = MotionLoader(self.cfg.motion_files, device=self.device)
 
-        self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # per-env state
+        self.time_steps     = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.env_object_ids = (
+            torch.arange(self.num_envs, device=self.device) % self.motion.num_objects
+        )                                                       # round-robin assignment
         self.future_offsets = torch.tensor(cfg.future_offsets, dtype=torch.long, device=self.device)
+
+        # caches refreshed in _update_command
+        self._current_frame: MotionData | None = None
+        self._future_frame: MotionData | None = None
 
         self.metrics["error_anchor_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_rot"] = torch.zeros(self.num_envs, device=self.device)
-        self.metrics["error_body_pos"] = torch.zeros(self.num_envs, device=self.device)
-        self.metrics["error_body_rot"] = torch.zeros(self.num_envs, device=self.device)
-        self.metrics["error_joint_pos"] = torch.zeros(self.num_envs, device=self.device)
-        self.metrics["error_joint_vel"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_body_pos"]   = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_body_rot"]   = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_joint_pos"]  = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_joint_vel"]  = torch.zeros(self.num_envs, device=self.device)
 
-    # -- future time steps
-    @property
-    def _future_ts(self) -> torch.Tensor:
-        """(num_envs, num_offsets) clamped future time step indices."""
-        future = self.time_steps.unsqueeze(1) + self.future_offsets.unsqueeze(0)
-        return future.clamp(max=self.motion.time_step_total - 1)
+        # initial frame so properties are valid before the first _update_command
+        self._refresh_caches()
 
-    # -- command property
+    # ------------------------------------------------------------------- caches
+
+    def _refresh_caches(self) -> None:
+        self._current_frame = self.motion.get_frames(self.env_object_ids, self.time_steps)
+        # future: per-env clamp at each env's own motion length
+        future_t = self.time_steps[:, None] + self.future_offsets[None, :]    # (E, K)
+        seq_end = self.motion.motion_lengths[self.env_object_ids][:, None]    # (E, 1)
+        future_t = future_t.minimum(seq_end - 1)
+        motion_ids = self.env_object_ids[:, None].expand_as(future_t)
+        self._future_frame = self.motion.get_frames(motion_ids, future_t)
+
+    # ------------------------------------------------------------------- command
+
     @property
     def command(self) -> torch.Tensor:
         return torch.cat([self.joint_pos, self.joint_vel], dim=1)
 
-    # -- motion data properties
-    @property
-    def joint_pos(self) -> torch.Tensor:
-        return self.motion.joint_pos[self.time_steps]
+    # ------------------------------------------------------------------- motion-data properties (current frame)
 
     @property
-    def future_joint_pos(self) -> torch.Tensor:
-        """Future reference joint positions. (num_envs, num_offsets * num_joints)"""
-        return self.motion.joint_pos[self._future_ts]
+    def joint_pos(self) -> torch.Tensor:
+        return self._current_frame.joint_pos
 
     @property
     def joint_vel(self) -> torch.Tensor:
-        return self.motion.joint_vel[self.time_steps]
-
-    @property
-    def future_joint_vel(self) -> torch.Tensor:
-        """Future reference joint velocities. (num_envs, num_offsets * num_joints)"""
-        return self.motion.joint_vel[self._future_ts]
-
-    @property
-    def anchor_pos_w(self) -> torch.Tensor:
-        return self.motion._body_pos_w[self.time_steps, self.anchor_index] + self._env.scene.env_origins
-
-    @property
-    def anchor_quat_w(self) -> torch.Tensor:
-        return self.motion._body_quat_w[self.time_steps, self.anchor_index]
-
-    @property
-    def anchor_lin_vel_w(self) -> torch.Tensor:
-        return self.motion._body_lin_vel_w[self.time_steps, self.anchor_index]
-
-    @property
-    def anchor_ang_vel_w(self) -> torch.Tensor:
-        return self.motion._body_ang_vel_w[self.time_steps, self.anchor_index]
-
-    # -- future anchor/body (num_envs, num_offsets, ...)
-    @property
-    def future_anchor_pos_w(self) -> torch.Tensor:
-        return self.motion._body_pos_w[self._future_ts, self.anchor_index] + self._env.scene.env_origins.unsqueeze(1)
-
-    @property
-    def future_anchor_quat_w(self) -> torch.Tensor:
-        return self.motion._body_quat_w[self._future_ts, self.anchor_index]
-
-    @property
-    def future_body_pos_w(self) -> torch.Tensor:
-        return self.motion._body_pos_w[self._future_ts] + self._env.scene.env_origins[:, None, None, :]
-
-    @property
-    def future_body_quat_w(self) -> torch.Tensor:
-        return self.motion._body_quat_w[self._future_ts]
+        return self._current_frame.joint_vel
 
     @property
     def body_pos_w(self) -> torch.Tensor:
-        return self.motion._body_pos_w[self.time_steps] + self._env.scene.env_origins[:, None, :]
+        return self._current_frame.body_pos_w + self._env.scene.env_origins[:, None, :]
 
     @property
     def body_quat_w(self) -> torch.Tensor:
-        return self.motion._body_quat_w[self.time_steps]
+        return self._current_frame.body_quat_w
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self.motion._body_lin_vel_w[self.time_steps]
+        return self._current_frame.body_lin_vel_w
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
-        return self.motion._body_ang_vel_w[self.time_steps]
+        return self._current_frame.body_ang_vel_w
 
-    # -- robot data properties
+    @property
+    def anchor_pos_w(self) -> torch.Tensor:
+        return self._current_frame.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins
+
+    @property
+    def anchor_quat_w(self) -> torch.Tensor:
+        return self._current_frame.body_quat_w[:, self.anchor_index]
+
+    @property
+    def anchor_lin_vel_w(self) -> torch.Tensor:
+        return self._current_frame.body_lin_vel_w[:, self.anchor_index]
+
+    @property
+    def anchor_ang_vel_w(self) -> torch.Tensor:
+        return self._current_frame.body_ang_vel_w[:, self.anchor_index]
+
+    # ------------------------------------------------------------------- motion-data properties (future frames)
+
+    @property
+    def future_joint_pos(self) -> torch.Tensor:
+        # (E, K, 53) — caller flattens last two dims if needed
+        return self._future_frame.joint_pos
+
+    @property
+    def future_joint_vel(self) -> torch.Tensor:
+        return self._future_frame.joint_vel
+
+    @property
+    def future_body_pos_w(self) -> torch.Tensor:
+        return self._future_frame.body_pos_w + self._env.scene.env_origins[:, None, None, :]
+
+    @property
+    def future_body_quat_w(self) -> torch.Tensor:
+        return self._future_frame.body_quat_w
+
+    @property
+    def future_anchor_pos_w(self) -> torch.Tensor:
+        return self._future_frame.body_pos_w[:, :, self.anchor_index] + self._env.scene.env_origins[:, None, :]
+
+    @property
+    def future_anchor_quat_w(self) -> torch.Tensor:
+        return self._future_frame.body_quat_w[:, :, self.anchor_index]
+
+    # ------------------------------------------------------------------- reference object data (current + future)
+
+    @property
+    def ref_obj_pos_w(self) -> torch.Tensor:
+        return self._current_frame.object_pos_w + self._env.scene.env_origins
+
+    @property
+    def ref_obj_quat_w(self) -> torch.Tensor:
+        return self._current_frame.object_quat_w
+
+    @property
+    def ref_obj_lin_vel_w(self) -> torch.Tensor:
+        return self._current_frame.object_lin_vel_w
+
+    @property
+    def ref_obj_ang_vel_w(self) -> torch.Tensor:
+        return self._current_frame.object_ang_vel_w
+
+    @property
+    def future_obj_pos_w(self) -> torch.Tensor:
+        return self._future_frame.object_pos_w + self._env.scene.env_origins[:, None, :]
+
+    @property
+    def future_obj_quat_w(self) -> torch.Tensor:
+        return self._future_frame.object_quat_w
+
+    # ------------------------------------------------------------------- contact labels
+
+    @property
+    def ref_contact_label(self) -> torch.Tensor:
+        return self._current_frame.contact_label
+
+    @property
+    def future_contact_label(self) -> torch.Tensor:
+        return self._future_frame.contact_label
+
+    # ------------------------------------------------------------------- robot data passthrough
+
     @property
     def robot_joint_pos(self) -> torch.Tensor:
         return self.robot.data.joint_pos
@@ -157,19 +304,19 @@ class MotionCommand(CommandTerm):
 
     @property
     def robot_body_pos_w(self) -> torch.Tensor:
-        return self.robot.data.body_pos_w[:, :]
+        return self.robot.data.body_pos_w
 
     @property
     def robot_body_quat_w(self) -> torch.Tensor:
-        return self.robot.data.body_quat_w[:, :]
+        return self.robot.data.body_quat_w
 
     @property
     def robot_body_lin_vel_w(self) -> torch.Tensor:
-        return self.robot.data.body_lin_vel_w[:, :]
+        return self.robot.data.body_lin_vel_w
 
     @property
     def robot_body_ang_vel_w(self) -> torch.Tensor:
-        return self.robot.data.body_ang_vel_w[:, :]
+        return self.robot.data.body_ang_vel_w
 
     @property
     def robot_anchor_pos_w(self) -> torch.Tensor:
@@ -187,44 +334,8 @@ class MotionCommand(CommandTerm):
     def robot_anchor_ang_vel_w(self) -> torch.Tensor:
         return self.robot.data.body_ang_vel_w[:, self.anchor_index]
 
-    # -- reference object data properties
-    @property
-    def ref_obj_pos_w(self) -> torch.Tensor:
-        return self.motion.object_pos_w[self.time_steps] + self._env.scene.env_origins
+    # ------------------------------------------------------------------- sim object passthrough
 
-    @property
-    def ref_obj_quat_w(self) -> torch.Tensor:
-        return self.motion.object_quat_w[self.time_steps]
-
-    @property
-    def ref_obj_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.object_lin_vel_w[self.time_steps]
-
-    @property
-    def ref_obj_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.object_ang_vel_w[self.time_steps]
-
-    # -- future reference object data (num_envs, num_offsets, ...)
-    @property
-    def future_obj_pos_w(self) -> torch.Tensor:
-        return self.motion.object_pos_w[self._future_ts] + self._env.scene.env_origins.unsqueeze(1)
-
-    @property
-    def future_obj_quat_w(self) -> torch.Tensor:
-        return self.motion.object_quat_w[self._future_ts]
-
-    # -- reference contact label
-    @property
-    def ref_contact_label(self) -> torch.Tensor:
-        """Reference contact labels for current timestep. (num_envs, num_bodies)"""
-        return self.motion.contact_label[self.time_steps]
-
-    @property
-    def future_contact_label(self) -> torch.Tensor:
-        """Future reference contact labels. (num_envs, num_offsets, num_bodies)"""
-        return self.motion.contact_label[self._future_ts]
-
-    # -- sim object data properties
     @property
     def obj_pos_w(self) -> torch.Tensor:
         return self.object.data.root_pos_w
@@ -241,7 +352,8 @@ class MotionCommand(CommandTerm):
     def obj_ang_vel_w(self) -> torch.Tensor:
         return self.object.data.root_ang_vel_w
 
-    # -- CommandTerm interface
+    # ------------------------------------------------------------------- CommandTerm interface
+
     def _update_metrics(self):
         self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
         self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
@@ -257,64 +369,72 @@ class MotionCommand(CommandTerm):
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
+        n = len(env_ids)
 
+        # 1. sample new time_steps per env (per-env motion length)
         if self.cfg.rsi:
-            self.time_steps[env_ids] = torch.randint(
-                0, self.motion.time_step_total, (len(env_ids),),
-                device=self.device, dtype=torch.long,
-            )
+            T_per_env = self.motion.motion_lengths[self.env_object_ids[env_ids]]   # (n,)
+            rand = torch.rand(n, device=self.device)
+            self.time_steps[env_ids] = (rand * T_per_env.float()).long().clamp(min=0)
         else:
             self.time_steps[env_ids] = 0
 
-        # Randomize root pose
-        root_pos = self.anchor_pos_w.clone()
-        root_ori = self.anchor_quat_w.clone()
-        root_lin_vel = self.anchor_lin_vel_w.clone()
-        root_ang_vel = self.anchor_ang_vel_w.clone()
+        # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
+        new_frames = self.motion.get_frames(self.env_object_ids[env_ids], self.time_steps[env_ids])
 
-        range_list = [self.cfg.pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
+        # 3. randomize root pose around motion's anchor pose
+        root_pos      = new_frames.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins[env_ids]
+        root_ori      = new_frames.body_quat_w[:, self.anchor_index]
+        root_lin_vel  = new_frames.body_lin_vel_w[:, self.anchor_index]
+        root_ang_vel  = new_frames.body_ang_vel_w[:, self.anchor_index]
+
+        range_list = [self.cfg.pose_range.get(k, (0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_pos[env_ids] += rand_samples[:, 0:3]
+        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (n, 6), device=self.device)
+        root_pos = root_pos + rand_samples[:, 0:3]
         orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        root_ori[env_ids] = quat_mul(orientations_delta, root_ori[env_ids])
+        root_ori = quat_mul(orientations_delta, root_ori)
 
-        # Randomize root velocity
-        range_list = [self.cfg.velocity_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
+        range_list = [self.cfg.velocity_range.get(k, (0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
         ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device)
-        root_lin_vel[env_ids] += rand_samples[:, :3]
-        root_ang_vel[env_ids] += rand_samples[:, 3:]
+        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (n, 6), device=self.device)
+        root_lin_vel = root_lin_vel + rand_samples[:, :3]
+        root_ang_vel = root_ang_vel + rand_samples[:, 3:]
 
-        # Randomize joint positions
-        joint_pos = self.joint_pos.clone()
-        joint_vel = self.joint_vel.clone()
-        joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
-        soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
-        joint_pos[env_ids] = torch.clip(
-            joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
+        # 4. randomize joint positions
+        joint_pos = new_frames.joint_pos + sample_uniform(
+            *self.cfg.joint_position_range, new_frames.joint_pos.shape, self.device
         )
+        soft_limits = self.robot.data.soft_joint_pos_limits[env_ids]
+        joint_pos = torch.clip(joint_pos, soft_limits[:, :, 0], soft_limits[:, :, 1])
+        joint_vel = new_frames.joint_vel
 
-        # Write randomized state to sim
+        # 5. write to sim
         self.robot.write_root_state_to_sim(
-            torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
+            torch.cat([root_pos, root_ori, root_lin_vel, root_ang_vel], dim=-1),
             env_ids=env_ids,
         )
-        self.robot.write_joint_state_to_sim(joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids)
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
-        # Reset object to reference state
+        # 6. reset object to its motion's reference (with env_origins offset)
+        obj_pos = new_frames.object_pos_w + self._env.scene.env_origins[env_ids]
         obj_state = torch.cat([
-            self.ref_obj_pos_w[env_ids],
-            self.ref_obj_quat_w[env_ids],
-            self.ref_obj_lin_vel_w[env_ids],
-            self.ref_obj_ang_vel_w[env_ids],
+            obj_pos,
+            new_frames.object_quat_w,
+            new_frames.object_lin_vel_w,
+            new_frames.object_ang_vel_w,
         ], dim=-1)
         self.object.write_root_state_to_sim(obj_state, env_ids=env_ids)
 
     def _update_command(self):
         self.time_steps += 1
-        env_ids_to_reset = torch.where(self.time_steps >= self.motion.time_step_total)[0]
+        seq_end = self.motion.motion_lengths[self.env_object_ids]    # (num_envs,)
+        env_ids_to_reset = torch.where(self.time_steps >= seq_end)[0]
         self._resample_command(env_ids_to_reset)
+        # refresh caches once for the rest of the step
+        self._refresh_caches()
+
+    # ------------------------------------------------------------------- debug viz
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
@@ -325,7 +445,6 @@ class MotionCommand(CommandTerm):
                 self.current_anchor_vis = VisualizationMarkers(
                     self.cfg.anchor_visualizer_cfg.replace(prim_path="/World/Visuals/Command/current/anchor")
                 )
-                num_bodies = len(self.body_indices)
                 self.goal_body_vis = VisualizationMarkers(
                     self.cfg.body_visualizer_cfg.replace(prim_path="/World/Visuals/Command/goal/bodies")
                 )
@@ -333,35 +452,30 @@ class MotionCommand(CommandTerm):
                     self.cfg.body_visualizer_cfg.replace(prim_path="/World/Visuals/Command/current/bodies")
                 )
 
-            self.goal_anchor_vis.set_visibility(True)
-            self.current_anchor_vis.set_visibility(True)
-            self.goal_body_vis.set_visibility(True)
-            self.current_body_vis.set_visibility(True)
+            for vis in (self.goal_anchor_vis, self.current_anchor_vis, self.goal_body_vis, self.current_body_vis):
+                vis.set_visibility(True)
         else:
             if hasattr(self, "goal_anchor_vis"):
-                self.goal_anchor_vis.set_visibility(False)
-                self.current_anchor_vis.set_visibility(False)
-                self.goal_body_vis.set_visibility(False)
-                self.current_body_vis.set_visibility(False)
+                for vis in (self.goal_anchor_vis, self.current_anchor_vis, self.goal_body_vis, self.current_body_vis):
+                    vis.set_visibility(False)
 
     def _debug_vis_callback(self, event):
         if not self.robot.is_initialized:
             return
-
-        # Anchor (pelvis) markers
         self.goal_anchor_vis.visualize(self.anchor_pos_w, self.anchor_quat_w)
         self.current_anchor_vis.visualize(self.robot_anchor_pos_w, self.robot_anchor_quat_w)
-
-        # Tracked body markers — flatten (num_envs, num_bodies) into (num_envs * num_bodies)
         bi = self.body_indices
-        goal_pos = self.body_pos_w[:, bi].reshape(-1, 3)
-        goal_quat = self.body_quat_w[:, bi].reshape(-1, 4)
-        curr_pos = self.robot_body_pos_w[:, bi].reshape(-1, 3)
-        curr_quat = self.robot_body_quat_w[:, bi].reshape(-1, 4)
+        self.goal_body_vis.visualize(
+            self.body_pos_w[:, bi].reshape(-1, 3),
+            self.body_quat_w[:, bi].reshape(-1, 4),
+        )
+        self.current_body_vis.visualize(
+            self.robot_body_pos_w[:, bi].reshape(-1, 3),
+            self.robot_body_quat_w[:, bi].reshape(-1, 4),
+        )
 
-        self.goal_body_vis.visualize(goal_pos, goal_quat)
-        self.current_body_vis.visualize(curr_pos, curr_quat)
 
+# ----------------------------------------------------------------------- cfg
 
 @configclass
 class MotionCommandCfg(CommandTermCfg):
@@ -387,7 +501,8 @@ class MotionCommandCfg(CommandTermCfg):
     rsi: bool = True
     """Random State Initialization: start from random frame (training) or frame 0 (evaluation)."""
 
-    motion_file: str = ""
+    motion_files: list[str] = []
+    """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""
 
     pose_range: dict[str, tuple[float, float]] = {}
     velocity_range: dict[str, tuple[float, float]] = {}

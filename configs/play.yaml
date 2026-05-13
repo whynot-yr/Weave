@@ -7,8 +7,8 @@
 #   python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 #       --config-dir ./configs --config-name play
 #
-# Switch object: edit motion_file below, or override inline:
-#   ... --config-name play env.commands.motion.motion_file=./data/example_data/floorlamp.npz
+# Switch object: edit motion_files below, or override inline:
+#   ... --config-name play env.commands.motion.motion_files=[./data/example_data/floorlamp.npz]
 
 defaults:
   - train
@@ -20,7 +20,8 @@ env:
 
   commands:
     motion:
-      motion_file: ./data/example_data/smallbox.npz
+      motion_files:
+        - ./data/example_data/smallbox.npz
       rsi: false
       joint_position_range: [0.0, 0.0]
       pose_range:

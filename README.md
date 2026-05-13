@@ -282,26 +282,6 @@ Comment out heavy omniverse packages:
 "<path-to-isaac-sim>/extscache/omni.services.*"
 ```
 
-### TensorBoard "port already in use" but `ss` shows nothing
-
-System-level proxy / redirect (e.g. clash-verge `nft` rule) intercepting localhost connect. Whitelist your tb port:
-
-```bash
-sudo nft insert rule ip eset_eea_wap output tcp dport 6006 accept
-```
-
-### `KeyError: '[Config]: Key not found under namespace: ...'`
-
-Hydra YAML override hit a key not declared in the cfg dataclass / RewTerm.params. Two fixes:
-
-- Remove the offending key from `configs/train.yaml`, or
-- Add the key with a default value in the corresponding `RewTerm(params={...})` / `MotionCommandCfg` field. IsaacLab `update_class_from_dict` only allows overriding keys that already exist in the cfg structure.
-
-### CUDA OOM at training start
-
-- Lower `env.scene.num_envs` (default 4096; try 2048 / 1024).
-- Lower `agent.policy.actor_hidden_dim` from 2048 to 1024.
-
 ### Resolved scene.object printed but training crashes immediately
 
 If you see `[INFO]: Resolved scene.object = ...` followed by a PhysX error, check the patch buffer:

@@ -21,7 +21,9 @@ env:
 
   commands:
     motion:
-      motion_file: ./data/example_data/smallbox.npz
+      motion_files:
+        - ./data/example_data/floorlamp.npz
+        - ./data/example_data/smallbox.npz
       rsi: true
       joint_position_range: [-0.1, 0.1]
       pose_range:
