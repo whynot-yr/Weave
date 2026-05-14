@@ -289,11 +289,11 @@ class MotionCommand(CommandTerm):
         # Randomize joint positions
         joint_pos = self.joint_pos.clone()
         joint_vel = self.joint_vel.clone()
-        joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
-        soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
-        joint_pos[env_ids] = torch.clip(
-            joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
-        )
+        # joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, joint_pos.device)
+        # soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
+        # joint_pos[env_ids] = torch.clip(
+        #     joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
+        # )
 
         # Write randomized state to sim
         self.robot.write_root_state_to_sim(

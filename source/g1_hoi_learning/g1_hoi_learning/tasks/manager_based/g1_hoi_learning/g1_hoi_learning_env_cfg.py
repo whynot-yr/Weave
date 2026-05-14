@@ -292,7 +292,7 @@ class TerminationsCfg:
     )
     object_ori = DoneTerm(
         func=mdp.bad_object_ori,
-        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 0.8},
+        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 0.3},
     )
     ee_body_pos = DoneTerm(
         func=mdp.bad_motion_body_pos_z_only,
@@ -338,9 +338,9 @@ class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         self.decimation = 4
         self.episode_length_s = 10.0
-        self.viewer.eye = (3.0, 3.0, 2.0)
-        self.viewer.origin_type = "asset_root"
-        self.viewer.asset_name = "robot"
+        # self.viewer.eye = (3.0, 3.0, 2.0)
+        # self.viewer.origin_type = "asset_root"
+        # self.viewer.asset_name = "robot"
         self.sim.dt = 1 / 200
         self.sim.render_interval = self.decimation
         self.sim.physx.gpu_max_rigid_patch_count = 16 * 2**16
