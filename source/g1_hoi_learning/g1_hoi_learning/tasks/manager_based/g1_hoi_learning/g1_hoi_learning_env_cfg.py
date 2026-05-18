@@ -232,16 +232,16 @@ class RewardsCfg:
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
     )
-    motion_body_lin_vel = RewTerm(
-        func=mdp.motion_body_linear_velocity_error_exp,
-        weight=1.0,
-        params={"command_name": "motion", "std": 1.0},
-    )
-    motion_body_ang_vel = RewTerm(
-        func=mdp.motion_body_angular_velocity_error_exp,
-        weight=1.0,
-        params={"command_name": "motion", "std": 3.14},
-    )
+    # motion_body_lin_vel = RewTerm(
+    #     func=mdp.motion_body_linear_velocity_error_exp,
+    #     weight=1.0,
+    #     params={"command_name": "motion", "std": 1.0},
+    # )
+    # motion_body_ang_vel = RewTerm(
+    #     func=mdp.motion_body_angular_velocity_error_exp,
+    #     weight=1.0,
+    #     params={"command_name": "motion", "std": 3.14},
+    # )
     # object tracking
     object_pos = RewTerm(
         func=mdp.object_position_error_exp,
@@ -252,6 +252,16 @@ class RewardsCfg:
         func=mdp.object_orientation_error_exp,
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
+    )
+    # hand position relative to object (in object's local frame)
+    hand_obj_rel_pos = RewTerm(
+        func=mdp.motion_hand_obj_relative_pos_error_exp,
+        weight=2.0,
+        params={
+            "command_name": "motion",
+            "hand_body_names": ["L_.*", "R_.*"],
+            "std": 0.1,
+        },
     )
     # contact
     contact = RewTerm(
