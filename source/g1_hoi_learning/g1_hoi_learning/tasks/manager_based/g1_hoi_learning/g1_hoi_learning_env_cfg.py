@@ -232,16 +232,6 @@ class RewardsCfg:
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
     )
-    # motion_body_lin_vel = RewTerm(
-    #     func=mdp.motion_body_linear_velocity_error_exp,
-    #     weight=1.0,
-    #     params={"command_name": "motion", "std": 1.0},
-    # )
-    # motion_body_ang_vel = RewTerm(
-    #     func=mdp.motion_body_angular_velocity_error_exp,
-    #     weight=1.0,
-    #     params={"command_name": "motion", "std": 3.14},
-    # )
     # object tracking
     object_pos = RewTerm(
         func=mdp.object_position_error_exp,
@@ -348,9 +338,9 @@ class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         self.decimation = 4
         self.episode_length_s = 10.0
-        # self.viewer.eye = (3.0, 3.0, 2.0)
-        # self.viewer.origin_type = "asset_root"
-        # self.viewer.asset_name = "robot"
+        self.viewer.eye = (-3.0, -3.0, 2.0)
+        self.viewer.origin_type = "asset_root"
+        self.viewer.asset_name = "robot"
         self.sim.dt = 1 / 200
         self.sim.render_interval = self.decimation
         self.sim.physx.gpu_max_rigid_patch_count = 16 * 2**16
