@@ -32,7 +32,14 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
 
     ground = AssetBaseCfg(
         prim_path="/World/ground",
-        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
+        spawn=sim_utils.GroundPlaneCfg(
+            size=(100.0, 100.0),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.0,
+                dynamic_friction=1.0,
+                restitution=0.0,
+            ),
+        ),
     )
 
     robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
@@ -122,10 +129,24 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_pos = mdp.JointPositionActionCfg(
+    joint_pos = mdp.MimicJointPositionActionCfg(
         asset_name="robot",
-        # Exclude passive Inspire hand joints (intermediate/distal)
+        # Exclude passive Inspire hand joints (intermediate/distal) — driven via the mimic table.
         joint_names=["^(?!.*(intermediate|distal)).*$"],
+        mimic={
+            "L_thumb_intermediate_joint":  ("L_thumb_proximal_pitch_joint", 1.6, 0.0),
+            "L_thumb_distal_joint":        ("L_thumb_proximal_pitch_joint", 2.4, 0.0),
+            "L_index_intermediate_joint":  ("L_index_proximal_joint",       1.0, 0.0),
+            "L_middle_intermediate_joint": ("L_middle_proximal_joint",      1.0, 0.0),
+            "L_ring_intermediate_joint":   ("L_ring_proximal_joint",        1.0, 0.0),
+            "L_pinky_intermediate_joint":  ("L_pinky_proximal_joint",       1.0, 0.0),
+            "R_thumb_intermediate_joint":  ("R_thumb_proximal_pitch_joint", 1.6, 0.0),
+            "R_thumb_distal_joint":        ("R_thumb_proximal_pitch_joint", 2.4, 0.0),
+            "R_index_intermediate_joint":  ("R_index_proximal_joint",       1.0, 0.0),
+            "R_middle_intermediate_joint": ("R_middle_proximal_joint",      1.0, 0.0),
+            "R_ring_intermediate_joint":   ("R_ring_proximal_joint",        1.0, 0.0),
+            "R_pinky_intermediate_joint":  ("R_pinky_proximal_joint",       1.0, 0.0),
+        },
     )
 
 
