@@ -1,6 +1,6 @@
 # g1_hoi_learning
 
-Isaac Lab extension for **Unitree G1 + Inspire dexterous hands** human-object-interaction (HOI) motion imitation. A single PPO policy learns to mimic mocap-retargeted reference motions of the robot manipulating a household object (clothesstand, suitcase, monitor, ...) while satisfying contact constraints on the hands.
+Isaac Lab extension for **Unitree G1 + Inspire dexterous hands** human-object-interaction (HOI) motion imitation. A single PPO policy learns to mimic mocap-retargeted reference motions of the robot manipulating one or more household objects (clothesstand, suitcase, monitor, ...) while satisfying contact constraints on the hands. Parallel envs are assigned objects round-robin, so a run can span multiple objects.
 
 Built on top of Isaac Sim 5.1.0 + Isaac Lab 2.3.2 + RSL-RL.
 
@@ -39,10 +39,10 @@ g1_hoi_learning/
         ├── __init__.py           # gym.register with _make_env factory (per-pkl object resolve)
         ├── g1_hoi_learning_env_cfg.py   # ManagerBasedRLEnvCfg (scene/obs/act/rew/term)
         ├── agents/rsl_rl_ppo_cfg.py      # PPORunnerCfg (SimBa + MuonPPO knobs)
-        └── mdp/                          # commands, observations, rewards, terminations
+        └── mdp/                          # commands, observations, actions, rewards, terminations
 ```
 
-Registered task: **`G1-Inspire-HOI-v0`** (single policy per training run; the npz `object_name` field selects which USD spawns).
+Registered task: **`G1-Inspire-HOI-v0`** (single policy per training run; each motion npz's `object_name` field selects its object USD — list several npz to train one policy across multiple objects).
 
 ---
 
@@ -97,7 +97,7 @@ python scripts/data_replay.py \
     --input_fps 30 --output_fps 50
 ```
 
-The output npz contains: `joint_pos`, `joint_vel`, `body_pos_w/quat_w/lin_vel_w/ang_vel_w`, `object_pos_w/quat_w/lin_vel_w/ang_vel_w`, `contact_label`, `object_name`. The `object_name` field is read by `_make_env` at gym.make time to spawn the correct USD into the scene.
+The output npz contains: `joint_pos`, `joint_vel`, `body_pos_w/quat_w/lin_vel_w/ang_vel_w`, `object_pos_w/quat_w/lin_vel_w/ang_vel_w`, `contact_label`, `fps`, `object_name`. The `object_name` field is read by `_make_env` at gym.make time to spawn the correct USD into the scene.
 
 `data/example_data/` already contains pre-converted npz for 12 objects.
 
@@ -185,7 +185,7 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 # switch object inline (or edit play.yaml)
 python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
     --config-dir ./configs --config-name play \
-    env.commands.motion.motion_file=./data/example_data/floorlamp.npz
+    env.commands.motion.motion_files=[./data/example_data/floorlamp.npz]
 
 # specific run / checkpoint
 python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
@@ -223,19 +223,19 @@ python scripts/random_agent.py --task=G1-Inspire-HOI-v0 \
 
 | Component   | Detail |
 | ----------- | ------ |
-| Robot       | G1 (29 DOF body) + 2× Inspire hand (12 DOF/hand, follower joints driven by PhysX mimic gear constraints) |
-| Object      | spawned per `motion_file["object_name"]` → `OBJECT_CFG_BY_NAME` lookup → matching USD |
-| Action      | `JointPositionActionCfg` over driver joints (`^(?!.*(intermediate\|distal)).*$`) → 41 DoF |
+| Robot       | G1 (29 DOF body) + 2× Inspire hand (12 DOF/hand: 6 driver + 6 follower joints; followers driven in software from a `mimic` table) |
+| Object      | `_make_env` reads each motion npz's `object_name`, looks it up in `OBJECT_CFG_BY_NAME`, and builds a round-robin `MultiAssetSpawnerCfg` (env `i` → `motion_files[i % N]`) |
+| Action      | `MimicJointPositionActionCfg` over driver joints (`^(?!.*(intermediate\|distal)).*$`) → 41 DoF; follower finger joints written each step as `driver * mult + offset` |
 | Observation | reference future motion (joint pos/vel + body pose + object pose + contact label, K=[0,1,2,4,8] frames), current robot state (body pose / base vel / joint pos/vel / last action), `object_nearest_point_b` (per-body to nearest surface point), live contact |
-| Reward      | exp tracking on anchor pos/ori, body pos/ori/lin_vel/ang_vel, object pos/ori; per-body contact reward with continuous saturating-force (saturate_force=5 N); regularizers: `action_rate_l2 (-0.1)`, `joint_limit (-10)` |
-| Termination | time_out (10 s) + anchor pos > 0.25 m / anchor ori > 0.8 rad / object pos > 0.25 m / object ori > 0.8 rad / EE z deviation > 0.25 m / hand-contact lost > 20 frames |
+| Reward      | exp tracking on anchor pos/ori, body pos/ori, object pos/ori, and hand-object relative position in the object frame (std=0.1, weight 2.0); per-body contact reward with continuous saturating-force (saturate_force=5 N); regularizers: `action_rate_l2 (-0.1)`, `joint_limit (-10)` |
+| Termination | time_out (10 s) + anchor pos > 0.25 m / anchor ori > 0.8 rad / object pos > 0.25 m / object ori > 0.3 rad / EE z deviation > 0.25 m / hand-contact lost > 20 frames |
 | Reset       | RSI (`rsi=True`): uniform random frame from motion + small pose / velocity / joint perturbation; eval (`rsi=False`): frame 0 |
 
 ### Network + algorithm
 
-- **Backbone**: SimBa (input projection → N residual LN-MLP blocks → post-LN → output projection). Actor + critic each `hidden_dim=2048, num_blocks=2, expansion=1`. Both wrapped in `torch.compile(mode="default")`.
+- **Backbone**: SimBa (input projection → N residual pre-LN MLP blocks → post-LN → output projection). Actor + critic each `hidden_dim=2048, num_blocks=2, expansion=1`.
 - **Algorithm**: `MuonPPO` (custom PPO subclass). 2D matrix params go through Muon optimizer with `match_rms_adamw` LR scaling; 1D params + scalars go through AdamW. Adaptive KL learning-rate schedule, GAE (γ=0.99, λ=0.95), 5 epochs × 4 mini-batches per iter.
-- **Sim**: 4096 envs (configurable), `sim.dt=1/200 s`, `decimation=4` (policy at 50 Hz), episode 10 s, `solver_position_iter=4`, `enabled_self_collisions=True`, mimic gear constraints active.
+- **Sim**: 4096 envs (configurable), `sim.dt=1/200 s`, `decimation=4` (policy at 50 Hz), episode 10 s, `solver_position_iteration_count=8`, `enabled_self_collisions=True`. Inspire-hand followers use software mimic — no PhysX gear constraint.
 
 ---
 

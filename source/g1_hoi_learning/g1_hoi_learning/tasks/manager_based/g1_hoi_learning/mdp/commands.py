@@ -28,7 +28,7 @@ from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_error_magnitude, quat_from_euler_xyz, quat_mul, sample_uniform
+from isaaclab.utils.math import quat_error_magnitude
 
 from g1_hoi_learning.objects import ASSET_DIR
 
@@ -382,31 +382,14 @@ class MotionCommand(CommandTerm):
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
         new_frames = self.motion.get_frames(self.env_object_ids[env_ids], self.time_steps[env_ids])
 
-        # 3. randomize root pose around motion's anchor pose
+        # 3. root pose from motion's anchor pose
         root_pos      = new_frames.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins[env_ids]
         root_ori      = new_frames.body_quat_w[:, self.anchor_index]
         root_lin_vel  = new_frames.body_lin_vel_w[:, self.anchor_index]
         root_ang_vel  = new_frames.body_ang_vel_w[:, self.anchor_index]
 
-        range_list = [self.cfg.pose_range.get(k, (0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
-        ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (n, 6), device=self.device)
-        root_pos = root_pos + rand_samples[:, 0:3]
-        orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        root_ori = quat_mul(orientations_delta, root_ori)
-
-        range_list = [self.cfg.velocity_range.get(k, (0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
-        ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], (n, 6), device=self.device)
-        root_lin_vel = root_lin_vel + rand_samples[:, :3]
-        root_ang_vel = root_ang_vel + rand_samples[:, 3:]
-
-        # 4. randomize joint positions
-        joint_pos = new_frames.joint_pos + sample_uniform(
-            *self.cfg.joint_position_range, new_frames.joint_pos.shape, self.device
-        )
-        soft_limits = self.robot.data.soft_joint_pos_limits[env_ids]
-        joint_pos = torch.clip(joint_pos, soft_limits[:, :, 0], soft_limits[:, :, 1])
+        # 4. joint positions from motion
+        joint_pos = new_frames.joint_pos
         joint_vel = new_frames.joint_vel
 
         # 5. write to sim

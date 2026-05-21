@@ -21,7 +21,7 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/example_data/smallbox.npz
+        - ./data/example_data/tripod.npz
       rsi: false
       joint_position_range: [0.0, 0.0]
       pose_range:

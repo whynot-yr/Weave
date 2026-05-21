@@ -5,7 +5,7 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import ManagerTermBase, RewardTermCfg
-from isaaclab.utils.math import quat_error_magnitude
+from isaaclab.utils.math import quat_apply_inverse, quat_error_magnitude
 
 from .commands import MotionCommand
 
@@ -80,8 +80,6 @@ def motion_body_angular_velocity_error_exp(
 
 
 # -- Object tracking rewards --
-
-
 def object_position_error_exp(
     env: ManagerBasedRLEnv, command_name: str, std: float
 ) -> torch.Tensor:
@@ -114,9 +112,45 @@ def object_angular_velocity_error_exp(
     return torch.exp(-error / std**2)
 
 
+# -- Hand-object relative pose tracking --
+class motion_hand_obj_relative_pos_error_exp(ManagerTermBase):
+    """Tracking error for hand body positions expressed in the object's local frame.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        robot: Articulation = env.scene["robot"]
+        self.hand_idx = robot.find_bodies(cfg.params["hand_body_names"])[0]
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        hand_body_names: list[str],
+        std: float,
+    ) -> torch.Tensor:
+        command: MotionCommand = env.command_manager.get_term(command_name)
+        n = len(self.hand_idx)
+
+        # ref: hand positions in ref object frame
+        ref_diff_w = command.body_pos_w[:, self.hand_idx] - command.ref_obj_pos_w[:, None, :]
+        ref_pos_in_obj = quat_apply_inverse(
+            command.ref_obj_quat_w[:, None, :].expand(-1, n, -1),
+            ref_diff_w,
+        )
+
+        # sim: hand positions in sim object frame
+        sim_diff_w = command.robot_body_pos_w[:, self.hand_idx] - command.obj_pos_w[:, None, :]
+        sim_pos_in_obj = quat_apply_inverse(
+            command.obj_quat_w[:, None, :].expand(-1, n, -1),
+            sim_diff_w,
+        )
+
+        error = torch.sum((ref_pos_in_obj - sim_pos_in_obj) ** 2, dim=-1).mean(-1)
+        return torch.exp(-error / std**2)
+
+
 # -- Contact reward --
-
-
 class contact_reward(ManagerTermBase):
     """Contact reward for hand bodies based on reference labels. Range [0, 1].
 
@@ -148,8 +182,8 @@ class contact_reward(ManagerTermBase):
         forces = sensor.data.force_matrix_w[:, 0, self.hand_idx, :]           # (num_envs, num_hand, 3)
         sim_strength = (forces.norm(dim=-1) / saturate_force).clamp(0, 1)     # (num_envs, num_hand)
 
-        target = (ref_label > 0).float()                                      # 该接触 = 1
-        mask = (ref_label != 0).float()                                       # 非 neutral
+        target = (ref_label > 0).float()
+        mask = (ref_label != 0).float()
 
         err = (target - sim_strength).abs() * mask
         score = 1.0 - err

@@ -22,8 +22,8 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/example_data/floorlamp.npz
-        - ./data/example_data/smallbox.npz
+        - ./data/example_data/tripod.npz
+        # - ./data/example_data/smallbox.npz
       rsi: true
       joint_position_range: [-0.1, 0.1]
       pose_range:
@@ -43,14 +43,18 @@ env:
 
   # ---- reward weights & params ----
   rewards:
-    motion_anchor_pos:    { weight: 1.0, params: { command_name: motion, std: 0.3  } }
-    motion_anchor_ori:    { weight: 1.0, params: { command_name: motion, std: 0.4  } }
-    motion_body_pos:      { weight: 1.0, params: { command_name: motion, std: 0.3  } }
-    motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4  } }
-    motion_body_lin_vel:  { weight: 1.0, params: { command_name: motion, std: 1.0  } }
-    motion_body_ang_vel:  { weight: 1.0, params: { command_name: motion, std: 3.14 } }
-    object_pos:           { weight: 1.0, params: { command_name: motion, std: 0.3  } }
-    object_ori:           { weight: 1.0, params: { command_name: motion, std: 0.4  } }
+    motion_anchor_pos:    { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    motion_anchor_ori:    { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    motion_body_pos:      { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    object_pos:           { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    object_ori:           { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    hand_obj_rel_pos:
+      weight: 2.0
+      params:
+        command_name: motion
+        hand_body_names: ["L_.*", "R_.*"]
+        std: 0.1
     contact:
       weight: 1.0
       params:
@@ -66,7 +70,7 @@ env:
     anchor_pos:    { params: { command_name: motion, threshold: 0.25 } }
     anchor_ori:    { params: { command_name: motion, threshold: 0.8  } }
     object_pos:    { params: { command_name: motion, threshold: 0.25 } }
-    object_ori:    { params: { command_name: motion, threshold: 0.8  } }
+    object_ori:    { params: { command_name: motion, threshold: 0.3  } }
     ee_body_pos:
       params:
         command_name: motion

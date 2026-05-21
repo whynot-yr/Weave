@@ -32,7 +32,14 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
 
     ground = AssetBaseCfg(
         prim_path="/World/ground",
-        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
+        spawn=sim_utils.GroundPlaneCfg(
+            size=(100.0, 100.0),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.0,
+                dynamic_friction=1.0,
+                restitution=0.0,
+            ),
+        ),
     )
 
     robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
@@ -122,10 +129,24 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    joint_pos = mdp.JointPositionActionCfg(
+    joint_pos = mdp.MimicJointPositionActionCfg(
         asset_name="robot",
-        # Exclude passive Inspire hand joints (intermediate/distal)
+        # Exclude passive Inspire hand joints (intermediate/distal) — driven via the mimic table.
         joint_names=["^(?!.*(intermediate|distal)).*$"],
+        mimic={
+            "L_thumb_intermediate_joint":  ("L_thumb_proximal_pitch_joint", 1.6, 0.0),
+            "L_thumb_distal_joint":        ("L_thumb_proximal_pitch_joint", 2.4, 0.0),
+            "L_index_intermediate_joint":  ("L_index_proximal_joint",       1.0, 0.0),
+            "L_middle_intermediate_joint": ("L_middle_proximal_joint",      1.0, 0.0),
+            "L_ring_intermediate_joint":   ("L_ring_proximal_joint",        1.0, 0.0),
+            "L_pinky_intermediate_joint":  ("L_pinky_proximal_joint",       1.0, 0.0),
+            "R_thumb_intermediate_joint":  ("R_thumb_proximal_pitch_joint", 1.6, 0.0),
+            "R_thumb_distal_joint":        ("R_thumb_proximal_pitch_joint", 2.4, 0.0),
+            "R_index_intermediate_joint":  ("R_index_proximal_joint",       1.0, 0.0),
+            "R_middle_intermediate_joint": ("R_middle_proximal_joint",      1.0, 0.0),
+            "R_ring_intermediate_joint":   ("R_ring_proximal_joint",        1.0, 0.0),
+            "R_pinky_intermediate_joint":  ("R_pinky_proximal_joint",       1.0, 0.0),
+        },
     )
 
 
@@ -232,16 +253,6 @@ class RewardsCfg:
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
     )
-    motion_body_lin_vel = RewTerm(
-        func=mdp.motion_body_linear_velocity_error_exp,
-        weight=1.0,
-        params={"command_name": "motion", "std": 1.0},
-    )
-    motion_body_ang_vel = RewTerm(
-        func=mdp.motion_body_angular_velocity_error_exp,
-        weight=1.0,
-        params={"command_name": "motion", "std": 3.14},
-    )
     # object tracking
     object_pos = RewTerm(
         func=mdp.object_position_error_exp,
@@ -252,6 +263,16 @@ class RewardsCfg:
         func=mdp.object_orientation_error_exp,
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
+    )
+    # hand position relative to object (in object's local frame)
+    hand_obj_rel_pos = RewTerm(
+        func=mdp.motion_hand_obj_relative_pos_error_exp,
+        weight=2.0,
+        params={
+            "command_name": "motion",
+            "hand_body_names": ["L_.*", "R_.*"],
+            "std": 0.1,
+        },
     )
     # contact
     contact = RewTerm(
@@ -293,7 +314,7 @@ class TerminationsCfg:
     )
     object_ori = DoneTerm(
         func=mdp.bad_object_ori,
-        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 0.8},
+        params={"asset_cfg": SceneEntityCfg("robot"), "command_name": "motion", "threshold": 0.3},
     )
     ee_body_pos = DoneTerm(
         func=mdp.bad_motion_body_pos_z_only,
@@ -339,7 +360,7 @@ class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         self.decimation = 4
         self.episode_length_s = 10.0
-        self.viewer.eye = (3.0, 3.0, 2.0)
+        self.viewer.eye = (-3.0, -3.0, 2.0)
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "robot"
         self.sim.dt = 1 / 200
