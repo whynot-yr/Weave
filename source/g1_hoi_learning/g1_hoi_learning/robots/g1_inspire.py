@@ -198,23 +198,18 @@ G1_INSPIRE_CFG = ArticulationCfg(
                 ".*_pinky_proximal_joint",
                 ".*_pinky_intermediate_joint",
             ],
+            velocity_limit_sim={
+                ".*_thumb_proximal_pitch_joint": 1.7,
+                ".*_thumb_proximal_yaw_joint": 2.9,
+                ".*_thumb_intermediate_joint": 2.9,
+                ".*_thumb_distal_joint": 2.9,
+                ".*_(index|middle|ring|pinky)_proximal_joint": 4.3,
+                ".*_(index|middle|ring|pinky)_intermediate_joint": 4.3,
+            },
             effort_limit_sim=1.0,
-            velocity_limit_sim=5.0,
             stiffness=5.0,
             damping=0.5,
+            armature=0.01,
         ),
     },
 )
-
-G1_ACTION_SCALE = {}
-for a in G1_INSPIRE_CFG.actuators.values():
-    e = a.effort_limit_sim
-    s = a.stiffness
-    names = a.joint_names_expr
-    if not isinstance(e, dict):
-        e = {n: e for n in names}
-    if not isinstance(s, dict):
-        s = {n: s for n in names}
-    for n in names:
-        if n in e and n in s and s[n]:
-            G1_ACTION_SCALE[n] = 0.25 * e[n] / s[n]

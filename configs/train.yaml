@@ -22,8 +22,8 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/example_data/tripod.npz
-        # - ./data/example_data/smallbox.npz
+        # - ./data/example_data/tripod.npz
+        - ./data/example_data/smalltable.npz
       rsi: true
       joint_position_range: [-0.1, 0.1]
       pose_range:
@@ -56,7 +56,7 @@ env:
         hand_body_names: ["L_.*", "R_.*"]
         std: 0.1
     contact:
-      weight: 1.0
+      weight: 2.0
       params:
         command_name: motion
         sensor_name: contact_sensor

@@ -277,7 +277,7 @@ class RewardsCfg:
     # contact
     contact = RewTerm(
         func=mdp.contact_reward,
-        weight=1.0,
+        weight=2.0,
         params={
             "command_name": "motion",
             "sensor_name": "contact_sensor",
