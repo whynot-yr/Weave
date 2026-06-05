@@ -21,6 +21,10 @@ _COMMON_VISUAL_MATERIAL = sim_utils.PreviewSurfaceCfg(
     metallic=0.0,
 )
 
+_COMMON_COLLISION_PROPS = sim_utils.CollisionPropertiesCfg(
+    contact_offset=0.02,
+)
+
 
 def _object_cfg(usd_path: str) -> RigidObjectCfg:
     return RigidObjectCfg(
@@ -30,6 +34,7 @@ def _object_cfg(usd_path: str) -> RigidObjectCfg:
             activate_contact_sensors=True,
             mass_props=_COMMON_MASS_PROPS,
             rigid_props=_COMMON_RIGID_PROPS,
+            collision_props=_COMMON_COLLISION_PROPS,
             visual_material=_COMMON_VISUAL_MATERIAL,
         ),
     )

@@ -180,7 +180,7 @@ class ObservationsCfg:
         # object state (current + future)
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
-        object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
+        object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
         # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
@@ -216,7 +216,7 @@ class ObservationsCfg:
         # object state (current + future)
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
-        object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
+        object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
         # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
@@ -270,7 +270,7 @@ class RewardsCfg:
         weight=2.0,
         params={
             "command_name": "motion",
-            "hand_body_names": ["L_.*", "R_.*"],
+            "hand_body_names": [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"],
             "std": 0.1,
         },
     )
@@ -281,7 +281,7 @@ class RewardsCfg:
         params={
             "command_name": "motion",
             "sensor_name": "contact_sensor",
-            "hand_body_names": ["L_.*", "R_.*"],
+            "hand_body_names": [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"],
             "saturate_force": 5.0,
         },
     )
@@ -334,7 +334,7 @@ class TerminationsCfg:
         params={
             "command_name": "motion",
             "sensor_name": "contact_sensor",
-            "hand_body_names": ["L_.*", "R_.*"],
+            "hand_body_names": [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"],
             "max_lost_frames": 20,
         },
     )

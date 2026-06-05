@@ -53,14 +53,14 @@ env:
       weight: 2.0
       params:
         command_name: motion
-        hand_body_names: ["L_.*", "R_.*"]
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
         std: 0.1
     contact:
       weight: 2.0
       params:
         command_name: motion
         sensor_name: contact_sensor
-        hand_body_names: ["L_.*", "R_.*"]
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
         saturate_force: 5.0
     action_rate_l2:       { weight: -0.1 }
     joint_limit:          { weight: -10.0 }
@@ -84,7 +84,7 @@ env:
       params:
         command_name: motion
         sensor_name: contact_sensor
-        hand_body_names: ["L_.*", "R_.*"]
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
         max_lost_frames: 20
 
 # =============================================================================

@@ -209,29 +209,23 @@ def motion_future_obj_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Te
     return pos_b.reshape(env.num_envs, -1)
 
 
-def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Per-body vector from each robot body to its nearest point on the object surface,
-    expressed in the robot anchor frame. (num_envs, num_bodies * 3)
+def object_point_cloud_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Object surface point cloud expressed in the robot anchor frame.
+    (num_envs, P * 3), where P is the per-object surface-sample count.
     """
     command: MotionCommand = env.command_manager.get_term(command_name)
     # per-env surface points: pick this env's object's surface from (N, P, 3)
     pts_local = command.motion.surface[command.env_object_ids]    # (num_envs, P, 3) object frame
     # surface points: object frame -> world
     pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
-    body_pos_w = command.robot_body_pos_w   # (num_envs, B, 3)
-    B = body_pos_w.shape[1]
-    # nearest point per body
-    dist = torch.cdist(body_pos_w, pts_w)             # (num_envs, B, P)
-    idx = dist.argmin(dim=-1)                          # (num_envs, B)
-    nearest_w = pts_w.gather(1, idx.unsqueeze(-1).expand(-1, -1, 3))  # (num_envs, B, 3)
-    # vector body -> nearest point, in world
-    diff_w = nearest_w - body_pos_w
-    # rotate into anchor frame
-    diff_b = quat_apply_inverse(
-        command.robot_anchor_quat_w[:, None, :].expand(-1, B, -1),
-        diff_w,
+    P = pts_w.shape[1]
+    # world -> anchor frame: these are POINTS, so subtract the anchor origin BEFORE rotating
+    # (unlike the body->surface vectors, which are translation-invariant and only need rotation).
+    pts_b = quat_apply_inverse(
+        command.robot_anchor_quat_w[:, None, :].expand(-1, P, -1),
+        pts_w - command.robot_anchor_pos_w[:, None, :],
     )
-    return diff_b.reshape(env.num_envs, -1)
+    return pts_b.reshape(env.num_envs, -1)
 
 
 def motion_future_obj_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:

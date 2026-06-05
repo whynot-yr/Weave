@@ -30,6 +30,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
         fix_base=False,
         replace_cylinders_with_capsules=True,
         force_usd_conversion=True,
+        # make_instanceable=False,
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -48,6 +49,9 @@ G1_INSPIRE_CFG = ArticulationCfg(
         joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
             gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
         ),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.02,
+        )
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.76),
