@@ -22,6 +22,7 @@ env:
   commands:
     motion:
       motion_files:
+        # - ./data/example_data/clothesstand.npz
         # - ./data/example_data/tripod.npz
         - ./data/example_data/smalltable.npz
       rsi: true
@@ -85,7 +86,7 @@ env:
         command_name: motion
         sensor_name: contact_sensor
         hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
-        max_lost_frames: 20
+        max_lost_frames: 10
 
 # =============================================================================
 # Agent (PPO + Muon + SimBa)

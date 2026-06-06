@@ -6,6 +6,7 @@ from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
@@ -228,6 +229,50 @@ class ObservationsCfg:
 @configclass
 class EventCfg:
     """Configuration for events."""
+    # startup
+    physics_material = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.3, 1.6),
+            "dynamic_friction_range": (0.3, 1.2),
+            "restitution_range": (0.0, 0.5),
+            "num_buckets": 64,
+        },
+    )
+
+    base_com = EventTerm(
+        func=mdp.randomize_rigid_body_com,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+            "com_range": {"x": (-0.025, 0.025), "y": (-0.05, 0.05), "z": (-0.05, 0.05)},
+        },
+    )
+
+    randomize_finger_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*_(thumb|index|middle|ring|pinky)_.*_joint"),
+            "stiffness_distribution_params": (0.5, 2.0),   # ×default 5.0
+            "damping_distribution_params": (0.5, 2.0),     # ×default 0.5
+            "operation": "scale",
+            "distribution": "log_uniform",
+        },
+    )
+
+    randomize_finger_armature = EventTerm(
+        func=mdp.randomize_joint_parameters,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*_(thumb|index|middle|ring|pinky)_.*_joint"),
+            "armature_distribution_params": (0.5, 1.5),    # ×default 0.01
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
 
 @configclass
 class RewardsCfg:
@@ -335,7 +380,7 @@ class TerminationsCfg:
             "command_name": "motion",
             "sensor_name": "contact_sensor",
             "hand_body_names": [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"],
-            "max_lost_frames": 20,
+            "max_lost_frames": 10,
         },
     )
 
@@ -355,6 +400,7 @@ class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
 
     def __post_init__(self) -> None:
         """Post initialization."""

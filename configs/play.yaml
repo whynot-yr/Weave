@@ -21,6 +21,7 @@ env:
   commands:
     motion:
       motion_files:
+        # - ./data/example_data/clothesstand.npz
         - ./data/example_data/smalltable.npz
       rsi: false
       joint_position_range: [0.0, 0.0]
