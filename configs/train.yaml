@@ -24,7 +24,8 @@ env:
       motion_files:
         # - ./data/example_data/clothesstand.npz
         # - ./data/example_data/tripod.npz
-        - ./data/example_data/smalltable.npz
+        # - ./data/example_data/smalltable.npz
+        - ./data/example_data/smalltable_031.npz
       rsi: true
       joint_position_range: [-0.1, 0.1]
       pose_range:

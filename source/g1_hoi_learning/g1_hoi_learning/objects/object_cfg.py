@@ -26,13 +26,13 @@ _COMMON_COLLISION_PROPS = sim_utils.CollisionPropertiesCfg(
 )
 
 
-def _object_cfg(usd_path: str) -> RigidObjectCfg:
+def _object_cfg(usd_path: str, mass_props: sim_utils.MassPropertiesCfg = _COMMON_MASS_PROPS) -> RigidObjectCfg:
     return RigidObjectCfg(
         spawn=sim_utils.UsdFileCfg(
             scale=(1.0, 1.0, 1.0),
             usd_path=usd_path,
             activate_contact_sensors=True,
-            mass_props=_COMMON_MASS_PROPS,
+            mass_props=mass_props,
             rigid_props=_COMMON_RIGID_PROPS,
             collision_props=_COMMON_COLLISION_PROPS,
             visual_material=_COMMON_VISUAL_MATERIAL,
@@ -42,13 +42,19 @@ def _object_cfg(usd_path: str) -> RigidObjectCfg:
 
 CLOTHESSTAND_CFG = _object_cfg(CLOTHESSTAND_USD_PATH)
 FLOORLAMP_CFG = _object_cfg(FLOORLAMP_USD_PATH)
-LARGEBOX_CFG = _object_cfg(LARGEBOX_USD_PATH)
+LARGEBOX_CFG = _object_cfg(
+    LARGEBOX_USD_PATH, 
+    mass_props=sim_utils.MassPropertiesCfg(density=25)
+)   # ~1 kg
 LARGETABLE_CFG = _object_cfg(LARGETABLE_USD_PATH)
 MONITOR_CFG = _object_cfg(MONITOR_USD_PATH)
 PLASTICBOX_CFG = _object_cfg(PLASTICBOX_USD_PATH)
 SMALLBOX_CFG = _object_cfg(SMALLBOX_USD_PATH)
 SMALLTABLE_CFG = _object_cfg(SMALLTABLE_USD_PATH)
-SUITCASE_CFG = _object_cfg(SUITCASE_USD_PATH)
+SUITCASE_CFG = _object_cfg(
+    SUITCASE_USD_PATH, 
+    mass_props=sim_utils.MassPropertiesCfg(density=25)
+)   # ~1 kg
 TRASHCAN_CFG = _object_cfg(TRASHCAN_USD_PATH)
 TRIPOD_CFG = _object_cfg(TRIPOD_USD_PATH)
 WHITECHAIR_CFG = _object_cfg(WHITECHAIR_USD_PATH)
