@@ -215,7 +215,7 @@ def object_point_cloud_b(env: ManagerBasedEnv, command_name: str) -> torch.Tenso
     """
     command: MotionCommand = env.command_manager.get_term(command_name)
     # per-env surface points: pick this env's object's surface from (N, P, 3)
-    pts_local = command.motion.surface[command.env_object_ids]    # (num_envs, P, 3) object frame
+    pts_local = command.motion.surface[command.env_object]    # (num_envs, P, 3) object frame
     # surface points: object frame -> world
     pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
     P = pts_w.shape[1]
@@ -233,7 +233,7 @@ def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Ten
     """
     command: MotionCommand = env.command_manager.get_term(command_name)
     # per-env surface points: pick this env's object's surface from (N, P, 3)
-    pts_local = command.motion.surface[command.env_object_ids]    # (num_envs, P, 3) object frame
+    pts_local = command.motion.surface[command.env_object]    # (num_envs, P, 3) object frame
     # surface points: object frame -> world
     pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
     body_pos_w = command.robot_body_pos_w   # (num_envs, B, 3)

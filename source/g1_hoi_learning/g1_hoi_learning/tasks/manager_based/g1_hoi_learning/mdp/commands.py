@@ -1,18 +1,20 @@
 """
-Multi-motion command term: holds a buffer of N motions and tracks
-which (motion_id, local_t) each env is currently at.
+Multi-clip motion command: holds a buffer of M reference CLIPS (trajectories) grouped by the
+OBJECT each clip manipulates, and tracks which (clip, local_t) each env is currently at.
 
 Memory layout::
 
     buffer (TensorClass, batch_size=[sum_T])
-      motion 0 frames | motion 1 frames | ... | motion N-1 frames
-      [0..T0-1]       | [T0..T0+T1-1]   |     | [...sum_T-1]
+      clip 0 frames | clip 1 frames | ... | clip M-1 frames
+      [0..T0-1]     | [T0..T0+T1-1] |     | [...sum_T-1]
 
-    motion_starts: (N+1,)  cumulative start offsets
-    motion_lengths: (N,)   per-motion length
+    clip_starts:  (M+1,)  cumulative start offsets
+    clip_lengths: (M,)    per-clip length
+    clip_object:  (M,)    object index each clip manipulates
 
-Each env carries (env_object_ids[i], time_steps[i]). Frame access is via
-``buffer[motion_starts[env_object_ids] + time_steps]``.
+Each env owns a fixed object (``env_object``) and plays one clip of that object at a time
+(``env_clip``, re-sampled every episode). 
+Frame access is via ``buffer[clip_starts[env_clip] + time_steps]``.
 """
 
 import os
@@ -38,9 +40,6 @@ from g1_hoi_learning.objects import ASSET_DIR
 class MotionData(TensorClass):
     """
     Per-frame motion state. 
-    Used both as the flat buffer (batch_size=[sum_T])
-    and as a per-env / per-env-per-offset gather (batch_size=[num_envs] or
-    [num_envs, num_offsets]).
     """
 
     motion_id:        torch.Tensor   # (..., ) long  — which motion this frame belongs to
@@ -60,43 +59,62 @@ class MotionData(TensorClass):
 
 # ----------------------------------------------------------------------- MotionLoader
 
+def read_motion_object_names(path: str) -> list[str]:
+    """Per-clip object names for one packed motion file (data_replay_multiple.py).
+    """
+    return [str(x) for x in np.asarray(np.load(path, allow_pickle=True)["object_names"])]
+
+
 class MotionLoader:
+    """A library of reference motion CLIPS grouped by the OBJECT each clip manipulates.
+
+    clip  : one reference trajectory (M total); all clips' frames live in one concatenated buffer.
+    object: a distinct manipulable asset (O total); each clip belongs to one object, many clips may
+            share an object. Surface points are stored once per object.
+    """
+
     def __init__(self, motion_files: list[str], device: str | torch.device):
         assert len(motion_files) > 0, "motion_files must be non-empty"
         for f in motion_files:
             assert os.path.isfile(f), f"motion file not found: {f}"
+        per_file = [np.load(f, allow_pickle=True) for f in motion_files]
+        self.device = torch.device(device)
+        self.fps = int(np.asarray(per_file[0]["fps"]).reshape(-1)[0])
 
-        per_object = [np.load(f, allow_pickle=True) for f in motion_files]
-        self.num_objects = len(per_object)
-        self.fps = int(per_object[0]["fps"][0])
-
-        # ----- per-motion length and cumulative starts -----
-        lengths = torch.tensor(
-            [int(d["joint_pos"].shape[0]) for d in per_object],
-            dtype=torch.long, device=device,
-        )                                                       # (N,)
-        starts = torch.cat([
+        # ----- clips: per-clip length + object it manipulates -----
+        clip_lengths: list[int] = []
+        clip_obj_names: list[str] = []
+        for d in per_file:
+            clip_lengths.extend(int(x) for x in np.asarray(d["motion_lengths"]))
+            clip_obj_names.extend(str(x) for x in np.asarray(d["object_names"]))
+        self.num_clips = len(clip_lengths)
+        self.clip_lengths = torch.tensor(clip_lengths, dtype=torch.long, device=device)         # (M,)
+        self.clip_starts = torch.cat([
             torch.zeros(1, dtype=torch.long, device=device),
-            lengths.cumsum(0),
-        ])                                                      # (N+1,)
-        sum_T = int(starts[-1].item())
-        self.motion_lengths = lengths
-        self.motion_starts  = starts
+            self.clip_lengths.cumsum(0),
+        ])                                                                                      # (M+1,)
+        sum_T = int(self.clip_starts[-1].item())
 
-        # ----- per-frame motion_id and step -----
+        # ----- objects: unique names (stable order) + clip->object map + per-object clip table -----
+        self.object_names = list(dict.fromkeys(clip_obj_names))                                 # (O,) first-seen
+        self.num_objects = len(self.object_names)
+        oid = {name: i for i, name in enumerate(self.object_names)}
+        self.clip_object = torch.tensor([oid[n] for n in clip_obj_names], dtype=torch.long, device=device)  # (M,)
+        self.object_nclips = torch.bincount(self.clip_object, minlength=self.num_objects)       # (O,)
+        c_max = int(self.object_nclips.max())
+        self._clips_by_object = torch.zeros((self.num_objects, c_max), dtype=torch.long, device=device)
+        for o in range(self.num_objects):                       # O is small (#objects); runs once at init
+            self._clips_by_object[o, : self.object_nclips[o]] = torch.where(self.clip_object == o)[0]
+
+        # ----- frame buffer -----
         motion_id = torch.cat([
-            torch.full((int(L.item()),), i, dtype=torch.long, device=device)
-            for i, L in enumerate(lengths)
+            torch.full((L,), i, dtype=torch.long, device=device) for i, L in enumerate(clip_lengths)
         ])
-        step = torch.cat([
-            torch.arange(int(L.item()), dtype=torch.long, device=device)
-            for L in lengths
-        ])
+        step = torch.cat([torch.arange(L, dtype=torch.long, device=device) for L in clip_lengths])
 
-        # ----- flat-concat each per-frame field -----
         def _flat(key, dtype=torch.float32):
             return torch.cat(
-                [torch.tensor(d[key], dtype=dtype, device=device) for d in per_object],
+                [torch.tensor(np.asarray(d[key]), dtype=dtype, device=device) for d in per_file],
                 dim=0,
             )
 
@@ -117,20 +135,38 @@ class MotionLoader:
             batch_size=[sum_T],
         )
 
-        # ----- per-object surface points + names -----
-        self.object_names = [str(d["object_name"]) for d in per_object]
+        # ----- surface points, one set per object -----
         self.surface = torch.stack([
             torch.tensor(
                 np.load(os.path.join(ASSET_DIR, name, "surface.npy")),
                 dtype=torch.float32, device=device,
             )
             for name in self.object_names
-        ])                                                      # (N, P, 3)
+        ])                                                                                      # (O, P, 3)
 
-    def get_frames(self, motion_ids: torch.Tensor, local_t: torch.Tensor) -> MotionData:
-        """Gather frames for arbitrary (motion_ids, local_t)."""
-        global_idx = self.motion_starts[motion_ids] + local_t
-        return self.buffer[global_idx]
+    @staticmethod
+    def object_names_of(motion_files: list[str]) -> list[str]:
+        """Unique object names across the files, in stable (file, then in-file) order."""
+        names: list[str] = []
+        for f in motion_files:
+            for n in read_motion_object_names(f):
+                if n not in names:
+                    names.append(n)
+        return names
+
+    def frames(self, clip_ids: torch.Tensor, t: torch.Tensor) -> MotionData:
+        """Gather frames at (clip, local time)."""
+        return self.buffer[self.clip_starts[clip_ids] + t]
+
+    def sample_clip(self, object_ids: torch.Tensor) -> torch.Tensor:
+        """A uniformly random clip of each given object. (vectorized)"""
+        counts = self.object_nclips[object_ids]
+        j = (torch.rand(object_ids.shape[0], device=self.device) * counts.float()).long().minimum(counts - 1)
+        return self._clips_by_object[object_ids, j]
+
+    def first_clip(self, object_ids: torch.Tensor) -> torch.Tensor:
+        """The first clip of each given object (deterministic; used for eval)."""
+        return self._clips_by_object[object_ids, 14]
 
 
 # ----------------------------------------------------------------------- MotionCommand
@@ -151,9 +187,10 @@ class MotionCommand(CommandTerm):
 
         # per-env state
         self.time_steps     = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self.env_object_ids = (
-            torch.arange(self.num_envs, device=self.device) % self.motion.num_objects
-        )                                                       # round-robin assignment
+        # env -> object (fixed for the whole run; drives object spawn + surface)
+        self.env_object     = torch.arange(self.num_envs, device=self.device) % self.motion.num_objects
+        # env -> current clip within that object (re-sampled every episode); init to the object's first clip
+        self.env_clip       = self.motion.first_clip(self.env_object)
         self.future_offsets = torch.tensor(cfg.future_offsets, dtype=torch.long, device=self.device)
 
         # caches refreshed in _update_command
@@ -173,13 +210,13 @@ class MotionCommand(CommandTerm):
     # ------------------------------------------------------------------- caches
 
     def _refresh_caches(self) -> None:
-        self._current_frame = self.motion.get_frames(self.env_object_ids, self.time_steps)
-        # future: per-env clamp at each env's own motion length
+        self._current_frame = self.motion.frames(self.env_clip, self.time_steps)
+        # future: per-env clamp at each env's own clip length
         future_t = self.time_steps[:, None] + self.future_offsets[None, :]    # (E, K)
-        seq_end = self.motion.motion_lengths[self.env_object_ids][:, None]    # (E, 1)
-        future_t = future_t.minimum(seq_end - 1)
-        motion_ids = self.env_object_ids[:, None].expand_as(future_t)
-        self._future_frame = self.motion.get_frames(motion_ids, future_t)
+        clip_end = self.motion.clip_lengths[self.env_clip][:, None]           # (E, 1)
+        future_t = future_t.minimum(clip_end - 1)
+        clip_ids = self.env_clip[:, None].expand_as(future_t)
+        self._future_frame = self.motion.frames(clip_ids, future_t)
 
     # ------------------------------------------------------------------- command
 
@@ -370,17 +407,19 @@ class MotionCommand(CommandTerm):
         if len(env_ids) == 0:
             return
         n = len(env_ids)
+        objects = self.env_object[env_ids]
 
-        # 1. sample new time_steps per env (per-env motion length)
+        # 1. pick which clip each reset env plays (within its fixed object), then RSI the time
         if self.cfg.rsi:
-            T_per_env = self.motion.motion_lengths[self.env_object_ids[env_ids]]   # (n,)
-            rand = torch.rand(n, device=self.device)
-            self.time_steps[env_ids] = (rand * T_per_env.float()).long().clamp(min=0)
+            self.env_clip[env_ids] = self.motion.sample_clip(objects)
+            T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float()   # (n,)
+            self.time_steps[env_ids] = (torch.rand(n, device=self.device) * T_per_env).long().clamp(min=0)
         else:
+            self.env_clip[env_ids] = self.motion.first_clip(objects)
             self.time_steps[env_ids] = 0
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
-        new_frames = self.motion.get_frames(self.env_object_ids[env_ids], self.time_steps[env_ids])
+        new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])
 
         # 3. root pose from motion's anchor pose
         root_pos      = new_frames.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins[env_ids]
@@ -411,8 +450,8 @@ class MotionCommand(CommandTerm):
 
     def _update_command(self):
         self.time_steps += 1
-        seq_end = self.motion.motion_lengths[self.env_object_ids]    # (num_envs,)
-        env_ids_to_reset = torch.where(self.time_steps >= seq_end)[0]
+        clip_end = self.motion.clip_lengths[self.env_clip]    # (num_envs,)
+        env_ids_to_reset = torch.where(self.time_steps >= clip_end)[0]
         self._resample_command(env_ids_to_reset)
         # refresh caches once for the rest of the step
         self._refresh_caches()

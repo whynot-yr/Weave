@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gymnasium as gym
-import numpy as np
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
@@ -18,21 +17,21 @@ from . import agents
 def _make_env(cfg, **kwargs):
     """Resolve scene.object from motion_files' object_names.
 
-    Builds a MultiAssetSpawnerCfg(random_choice=False) so envs are assigned
-    objects in round-robin order: env i -> motion_files[i % N].
-    Forces replicate_physics=False (required by IsaacLab when spawning
-    heterogeneous assets across envs).
+    Builds a MultiAssetSpawnerCfg(random_choice=False) so envs are assigned objects in round-robin
+    order: env i -> object (i % O), matching MotionCommand.env_object. Forces replicate_physics=False
+    (required by IsaacLab when spawning heterogeneous assets across envs).
     """
+    from .mdp.commands import MotionLoader
+
     motion_files = cfg.commands.motion.motion_files
 
-    # collect per-file object names + per-object spawn cfgs
-    object_names: list[str] = []
+    # Unique objects across all clips, in the SAME order MotionLoader uses, so the object spawned for
+    # env i (assets_cfg[i % O]) matches that env's fixed object (env_object = arange % O).
+    object_names = MotionLoader.object_names_of(motion_files)
     assets_spawn_cfg: list[sim_utils.SpawnerCfg] = []
-    for f in motion_files:
-        name = str(np.load(f, allow_pickle=True)["object_name"])
+    for name in object_names:
         if name not in OBJECT_CFG_BY_NAME:
-            raise KeyError(f"Unknown object_name '{name}' from {f}; not in OBJECT_CFG_BY_NAME")
-        object_names.append(name)
+            raise KeyError(f"Unknown object_name '{name}'; not in OBJECT_CFG_BY_NAME")
         assets_spawn_cfg.append(OBJECT_CFG_BY_NAME[name].spawn)
 
     cfg.scene.object = RigidObjectCfg(

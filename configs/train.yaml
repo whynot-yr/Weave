@@ -24,8 +24,7 @@ env:
       motion_files:
         # - ./data/example_data/clothesstand.npz
         # - ./data/example_data/tripod.npz
-        # - ./data/example_data/smalltable.npz
-        - ./data/example_data/smalltable_031.npz
+        - ./data/example_data/smalltable_15clip.npz
       rsi: true
       joint_position_range: [-0.1, 0.1]
       pose_range:
@@ -49,8 +48,8 @@ env:
     motion_anchor_ori:    { weight: 1.0, params: { command_name: motion, std: 0.4 } }
     motion_body_pos:      { weight: 1.0, params: { command_name: motion, std: 0.3 } }
     motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
-    object_pos:           { weight: 1.0, params: { command_name: motion, std: 0.3 } }
-    object_ori:           { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    object_pos:           { weight: 2.0, params: { command_name: motion, std: 0.2 } }
+    object_ori:           { weight: 2.0, params: { command_name: motion, std: 0.3 } }
     hand_obj_rel_pos:
       weight: 2.0
       params:

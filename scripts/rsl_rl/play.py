@@ -91,9 +91,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg: RslRlBaseRunnerCfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
-    # disable RSI for evaluation (start from frame 0)
-    env_cfg.commands.motion.rsi = False
-
     # set the environment seed
     # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg.seed
@@ -180,6 +177,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset environment
     obs = env.get_observations()
     timestep = 0
+    # --- termination-cause statistics (printed each time an episode ends) ---
+    term_mgr = env.unwrapped.termination_manager
+    term_names = list(term_mgr.active_terms)
+    term_counts = {n: 0 for n in term_names}
+    n_episodes = 0
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -191,6 +193,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs, _, dones, _ = env.step(actions)
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
+        # --- log which termination term(s) ended each episode ---
+        n_done = int(dones.sum().item())
+        if n_done > 0:
+            step_term = {n: int(term_mgr.get_term(n).sum().item()) for n in term_names}
+            for n in term_names:
+                term_counts[n] += step_term[n]
+            n_episodes += n_done
+            fired = [f"{n}={step_term[n]}" for n in term_names if step_term[n] > 0]
+            total = max(sum(term_counts.values()), 1)
+            cum = "  ".join(
+                f"{n}:{term_counts[n]}({100 * term_counts[n] // total}%)" for n in term_names if term_counts[n] > 0
+            )
+            print(f"[TERM] +{n_done} ended by [{', '.join(fired)}] | episodes={n_episodes} | cumulative: {cum}")
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video
