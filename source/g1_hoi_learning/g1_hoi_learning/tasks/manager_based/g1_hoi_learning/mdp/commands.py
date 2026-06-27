@@ -166,7 +166,7 @@ class MotionLoader:
 
     def first_clip(self, object_ids: torch.Tensor) -> torch.Tensor:
         """The first clip of each given object (deterministic; used for eval)."""
-        return self._clips_by_object[object_ids, 14]
+        return self._clips_by_object[object_ids, 0]
 
 
 # ----------------------------------------------------------------------- MotionCommand
