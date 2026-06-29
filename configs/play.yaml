@@ -21,17 +21,17 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/train/clothesstand_31clip.npz
-        - ./data/train/floorlamp_34clip.npz
-        - ./data/train/largebox_48clip.npz
-        - ./data/train/largetable_36clip.npz
-        - ./data/train/smallbox_38clip.npz
-        - ./data/train/smalltable_42clip.npz
-        - ./data/train/suitcase_25clip.npz
-        - ./data/train/trashcan_35clip.npz
-        - ./data/train/tripod_34clip.npz
-        - ./data/train/whitechair_38clip.npz
-        - ./data/train/woodchair_54clip.npz
+        - ./data/test/clothesstand_31clip.npz
+        - ./data/test/floorlamp_34clip.npz
+        - ./data/test/largebox_48clip.npz
+        - ./data/test/largetable_36clip.npz
+        - ./data/test/smallbox_38clip.npz
+        - ./data/test/smalltable_42clip.npz
+        - ./data/test/suitcase_25clip.npz
+        - ./data/test/trashcan_35clip.npz
+        - ./data/test/tripod_34clip.npz
+        - ./data/test/whitechair_38clip.npz
+        - ./data/test/woodchair_54clip.npz
       rsi: false
       joint_position_range: [0.0, 0.0]
       pose_range:
