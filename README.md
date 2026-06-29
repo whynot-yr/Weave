@@ -1,6 +1,8 @@
-# g1_hoi_learning
+# G1 HOI Learning
 
-Isaac Lab extension for **Unitree G1 + Inspire dexterous hands** human-object-interaction (HOI) motion imitation. A single PPO policy learns to mimic mocap-retargeted reference motions of the robot manipulating one or more household objects (clothesstand, suitcase, monitor, ...) while satisfying contact constraints on the hands. Parallel envs are assigned objects round-robin, so a run can span multiple objects.
+Isaac Lab extension for **Unitree G1 + Inspire dexterous hands** human-object-interaction (HOI) motion imitation. 
+A single PPO policy learns to mimic mocap-retargeted reference motions of the robot manipulating one or more household objects (tripod, suitcase, chairs, boxes, ...) while satisfying contact constraints on the hands. 
+Parallel envs are assigned objects round-robin and each env samples among that object's reference clips, so one run trains across many objects and thousands of clips.
 
 Built on top of Isaac Sim 5.1.0 + Isaac Lab 2.3.2 + RSL-RL.
 
@@ -14,10 +16,15 @@ g1_hoi_learning/
 │   ├── train.yaml                # Hydra config: env / agent overrides for training
 │   └── play.yaml                 # inherits train.yaml; num_envs=1, RSI off for deterministic eval
 ├── data/
-│   ├── single_trajectory/        # one retargeted pkl per object (source for data_replay)
-│   └── example_data/             # ready-to-train npz, one per object (output of data_replay)
+│   ├── retargeted/               # <obj>_train.pkl — per-object dict of retargeted clips
+│   │                             #   (merged + no-hand-contact clips filtered out; input to packing)
+│   ├── train/                    # <obj>_<N>clip.npz — packed multi-clip TRAIN sets (one per object)
+│   ├── test/                     # <obj>_<N>clip.npz — packed multi-clip TEST sets (one per object)
+│   ├── example_data/             # single-clip example npz, one per object (quick smoke runs)
+│   └── plot/                     # dataset-distribution figure + script (train/test composition)
 ├── scripts/
-│   ├── data_replay.py            # pkl -> npz with sim-rolled body/object trajectories
+│   ├── data_replay_multiple.py   # pack ALL clips of one object (a dict pkl) → one multi-clip npz
+│   ├── data_replay.py            # single trajectory pkl → npz (one clip)
 │   ├── sample_object_points.py   # sample (P, 3) surface points from .obj per object
 │   ├── list_envs.py
 │   ├── zero_agent.py             # spawn env, step with zero action
@@ -33,16 +40,18 @@ g1_hoi_learning/
     │       ├── algorithm.py      # MuonPPO (Muon + AdamW mixed optimizer wrapping PPO)
     │       └── runner.py         # re-export of RSL-RL OnPolicyRunner
     ├── assets/                   # G1 URDF + meshes
-    ├── objects/                  # 13 household object configs + USD/OBJ + surface.npy
+    ├── objects/                  # household object configs + USD/OBJ + surface.npy
     ├── robots/g1_inspire.py      # G1 + Inspire hand articulation cfg
     └── tasks/manager_based/g1_hoi_learning/
-        ├── __init__.py           # gym.register with _make_env factory (per-pkl object resolve)
+        ├── __init__.py           # gym.register with _make_env factory (per-npz object resolve)
         ├── g1_hoi_learning_env_cfg.py   # ManagerBasedRLEnvCfg (scene/obs/act/rew/term)
         ├── agents/rsl_rl_ppo_cfg.py      # PPORunnerCfg (SimBa + MuonPPO knobs)
         └── mdp/                          # commands, observations, actions, rewards, terminations
 ```
 
-Registered task: **`G1-Inspire-HOI-v0`** (single policy per training run; each motion npz's `object_name` field selects its object USD — list several npz to train one policy across multiple objects).
+Registered task: **`G1-Inspire-HOI-v0`** (single policy per training run). 
+Each motion npz carries an `object_names` field; listing several npz in the config trains one policy across all of them.
+Environments are assigned objects round-robin and resolve the matching USD at `gym.make` time.
 
 ---
 
@@ -86,26 +95,24 @@ python scripts/sample_object_points.py --name clothesstand --num_points 512
 
 Output: `source/g1_hoi_learning/g1_hoi_learning/objects/<name>/surface.npy`.
 
-### Step 2 — pkl → npz (kinematic replay through Isaac Sim)
+### Step 2 — pack all clips of one object → one multi-clip npz
 
-Take one retargeted trajectory pkl, kinematically replay it through the sim, capture per-frame body/object world states, save to npz:
+`data_replay_multiple.py` kinematically replays every clip of an object through Isaac Sim, captures per-frame body/object world states, and concatenates them into a single packed npz for multi-clip RL training:
 
 ```bash
-python scripts/data_replay.py \
-    --input_file ./data/single_trajectory/sub17_smallbox_001.pkl \
-    --output_file ./data/example_data/smallbox.npz \
-    --input_fps 30 --output_fps 50
+python scripts/data_replay_multiple.py \
+    --input_file  ./data/retargeted/smalltable_train.pkl \
+    --output_file ./data/train/smalltable_279clip.npz \
+    --input_fps 30 --output_fps 50 --headless --overwrite
 ```
 
-The output npz contains: `joint_pos`, `joint_vel`, `body_pos_w/quat_w/lin_vel_w/ang_vel_w`, `object_pos_w/quat_w/lin_vel_w/ang_vel_w`, `contact_label`, `fps`, `object_name`. The `object_name` field is read by `_make_env` at gym.make time to spawn the correct USD into the scene.
-
-`data/example_data/` already contains pre-converted npz for 12 objects.
+The packed npz contains the per-frame arrays `joint_pos`, `joint_vel`, `body_pos_w/quat_w/lin_vel_w/ang_vel_w`, `object_pos_w/quat_w/lin_vel_w/ang_vel_w`, `contact_label` (all clips concatenated along axis 0), plus `motion_lengths` (frames per clip), `object_names`, `motion_names`, and `fps`. The `MotionLoader` slices clips back out via the `motion_lengths` offsets and groups them by object.
 
 ---
 
 ## Training
 
-Training uses a **Hydra YAML config** (`configs/train.yaml`) that overrides the registered base task. Edit the YAML to change motion file, num_envs, reward weights, network size, etc.
+Training uses a **Hydra YAML config** (`configs/train.yaml`) that overrides the registered base task. Edit the YAML to change motion files, num_envs, reward weights, network size, etc. The default config trains across all 11 objects in `data/train/`.
 
 ### Default usage
 
@@ -123,7 +130,7 @@ Hydra-style `key=value` overrides still work alongside the YAML:
 ```bash
 python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 \
     --config-dir ./configs --config-name train \
-    env.scene.num_envs=2048 \
+    env.scene.num_envs=8192 \
     agent.max_iterations=500 \
     agent.algorithm.learning_rate=5.0e-4
 ```
@@ -141,27 +148,31 @@ python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 \
 ```bash
 python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 \
     --config-dir ./configs --config-name train \
-    --run_name smallbox-baseline
+    --run_name multiobj-baseline
 ```
 
 Logs go to `logs/rsl_rl/g1_inspire_hoi/<timestamp>_<run_name>/`.
 
-### Available motion files
+### Dataset (motion files)
 
-| object       | npz                                  |
-| ------------ | ------------------------------------ |
-| clothesstand | `data/example_data/clothesstand.npz` |
-| floorlamp    | `data/example_data/floorlamp.npz`    |
-| largebox     | `data/example_data/largebox.npz`     |
-| largetable   | `data/example_data/largetable.npz`   |
-| plasticbox   | `data/example_data/plasticbox.npz`   |
-| smallbox     | `data/example_data/smallbox.npz`     |
-| smalltable   | `data/example_data/smalltable.npz`   |
-| suitcase     | `data/example_data/suitcase.npz`     |
-| trashcan     | `data/example_data/trashcan.npz`     |
-| tripod       | `data/example_data/tripod.npz`       |
-| whitechair   | `data/example_data/whitechair.npz`   |
-| woodchair    | `data/example_data/woodchair.npz`    |
+`configs/train.yaml` lists all 11 train sets; `configs/play.yaml` points at the matching test sets. Clip counts (no-hand-contact clips already filtered out):
+
+| object       | train npz                       | test npz                      |
+| ------------ | ------------------------------- | ----------------------------- |
+| clothesstand | `train/clothesstand_311clip.npz`| `test/clothesstand_31clip.npz`|
+| floorlamp    | `train/floorlamp_289clip.npz`   | `test/floorlamp_34clip.npz`   |
+| largebox     | `train/largebox_287clip.npz`    | `test/largebox_48clip.npz`    |
+| largetable   | `train/largetable_270clip.npz`  | `test/largetable_36clip.npz`  |
+| smallbox     | `train/smallbox_252clip.npz`    | `test/smallbox_38clip.npz`    |
+| smalltable   | `train/smalltable_279clip.npz`  | `test/smalltable_42clip.npz`  |
+| suitcase     | `train/suitcase_290clip.npz`    | `test/suitcase_25clip.npz`    |
+| trashcan     | `train/trashcan_253clip.npz`    | `test/trashcan_35clip.npz`    |
+| tripod       | `train/tripod_429clip.npz`      | `test/tripod_34clip.npz`      |
+| whitechair   | `train/whitechair_393clip.npz`  | `test/whitechair_38clip.npz`  |
+| woodchair    | `train/woodchair_383clip.npz`   | `test/woodchair_54clip.npz`   |
+| **total**    | **3,436 clips (~5.9 h)**        | **415 clips (~38 min)**       |
+
+A figure of the train/test composition by object is in `data/plot/` (regenerate with `python data/plot/plot_distribution_stacked_bar.py`).
 
 ### TensorBoard
 
@@ -185,7 +196,7 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 # switch object inline (or edit play.yaml)
 python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
     --config-dir ./configs --config-name play \
-    env.commands.motion.motion_files=[./data/example_data/floorlamp.npz]
+    env.commands.motion.motion_files=[./data/test/floorlamp_34clip.npz]
 
 # specific run / checkpoint
 python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
@@ -201,6 +212,10 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 `play.py` automatically:
 - runs in non-headless mode (GUI),
 - exports `policy.pt` (TorchScript) and `policy.onnx` to `<run_dir>/exported/`.
+
+> Note: each episode ends at `episode_length_s` (10 s = 500 steps) or a divergence
+> termination, independent of clip boundaries; the command walks through clips on
+> reset. To evaluate exactly one clip per episode you must terminate on clip end.
 
 ---
 
@@ -224,12 +239,12 @@ python scripts/random_agent.py --task=G1-Inspire-HOI-v0 \
 | Component   | Detail |
 | ----------- | ------ |
 | Robot       | G1 (29 DOF body) + 2× Inspire hand (12 DOF/hand: 6 driver + 6 follower joints; followers driven in software from a `mimic` table) |
-| Object      | `_make_env` reads each motion npz's `object_name`, looks it up in `OBJECT_CFG_BY_NAME`, and builds a round-robin `MultiAssetSpawnerCfg` (env `i` → `motion_files[i % N]`) |
+| Object      | `_make_env` reads each motion npz's `object_names`, looks it up in `OBJECT_CFG_BY_NAME`, and builds a round-robin `MultiAssetSpawnerCfg` (env `i` → object of `motion_files[i % N]`) |
 | Action      | `MimicJointPositionActionCfg` over driver joints (`^(?!.*(intermediate\|distal)).*$`) → 41 DoF; follower finger joints written each step as `driver * mult + offset` |
 | Observation | reference future motion (joint pos/vel + body pose + object pose + contact label, K=[0,1,2,4,8] frames), current robot state (body pose / base vel / joint pos/vel / last action), `object_nearest_point_b` (per-body to nearest surface point), live contact |
 | Reward      | exp tracking on anchor pos/ori, body pos/ori, object pos/ori, and hand-object relative position in the object frame (std=0.1, weight 2.0); per-body contact reward with continuous saturating-force (saturate_force=5 N); regularizers: `action_rate_l2 (-0.1)`, `joint_limit (-10)` |
 | Termination | time_out (10 s) + anchor pos > 0.25 m / anchor ori > 0.8 rad / object pos > 0.25 m / object ori > 0.3 rad / EE z deviation > 0.25 m / hand-contact lost > 20 frames |
-| Reset       | RSI (`rsi=True`): uniform random frame from motion + small pose / velocity / joint perturbation; eval (`rsi=False`): frame 0 |
+| Reset       | RSI (`rsi=True`): random clip of the env's object + uniform random frame + small pose / velocity / joint perturbation; eval (`rsi=False`): walk clips from frame 0 |
 
 ### Network + algorithm
 
@@ -247,45 +262,3 @@ pre-commit run --all-files
 ```
 
 ruff (line length 120, py3.10+ target) + codespell.
-
----
-
-## Design docs
-
-- [docs/multi-object.md](docs/multi-object.md) — plan for training one policy across multiple objects (multi-asset scene + flat-concat motion buffer + `TensorClass`)
-- [docs/psi.md](docs/psi.md) — plan for Physical State Initialization (replay-style reset state buffer, deferred)
-
----
-
-## Troubleshooting
-
-### Pylance missing indexing
-
-Add to `.vscode/settings.json` under `"python.analysis.extraPaths"`:
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "<path-to-this-repo>/source/g1_hoi_learning"
-    ]
-}
-```
-
-### Pylance out-of-memory
-
-Comment out heavy omniverse packages:
-
-```json
-"<path-to-isaac-sim>/extscache/omni.anim.*",
-"<path-to-isaac-sim>/extscache/omni.kit.*",
-"<path-to-isaac-sim>/extscache/omni.graph.*",
-"<path-to-isaac-sim>/extscache/omni.services.*"
-```
-
-### Resolved scene.object printed but training crashes immediately
-
-If you see `[INFO]: Resolved scene.object = ...` followed by a PhysX error, check the patch buffer:
-
-```python
-self.sim.physx.gpu_max_rigid_patch_count = 16 * 2**16   # bump if "Patch buffer overflow"
-```
