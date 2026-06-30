@@ -16,12 +16,8 @@ g1_hoi_learning/
 │   ├── train.yaml                # Hydra config: env / agent overrides for training
 │   └── play.yaml                 # inherits train.yaml; num_envs=1, RSI off for deterministic eval
 ├── data/
-│   ├── retargeted/               # <obj>_train.pkl — per-object dict of retargeted clips
-│   │                             #   (merged + no-hand-contact clips filtered out; input to packing)
 │   ├── train/                    # <obj>_<N>clip.npz — packed multi-clip TRAIN sets (one per object)
-│   ├── test/                     # <obj>_<N>clip.npz — packed multi-clip TEST sets (one per object)
-│   ├── example_data/             # single-clip example npz, one per object (quick smoke runs)
-│   └── plot/                     # dataset-distribution figure + script (train/test composition)
+│   └── test/                     # <obj>_<N>clip.npz — packed multi-clip TEST sets (one per object)
 ├── scripts/
 │   ├── data_replay_multiple.py   # pack ALL clips of one object (a dict pkl) → one multi-clip npz
 │   ├── data_replay.py            # single trajectory pkl → npz (one clip)
@@ -48,10 +44,6 @@ g1_hoi_learning/
         ├── agents/rsl_rl_ppo_cfg.py      # PPORunnerCfg (SimBa + MuonPPO knobs)
         └── mdp/                          # commands, observations, actions, rewards, terminations
 ```
-
-Registered task: **`G1-Inspire-HOI-v0`** (single policy per training run). 
-Each motion npz carries an `object_names` field; listing several npz in the config trains one policy across all of them.
-Environments are assigned objects round-robin and resolve the matching USD at `gym.make` time.
 
 ---
 
@@ -106,7 +98,8 @@ python scripts/data_replay_multiple.py \
     --input_fps 30 --output_fps 50 --headless --overwrite
 ```
 
-The packed npz contains the per-frame arrays `joint_pos`, `joint_vel`, `body_pos_w/quat_w/lin_vel_w/ang_vel_w`, `object_pos_w/quat_w/lin_vel_w/ang_vel_w`, `contact_label` (all clips concatenated along axis 0), plus `motion_lengths` (frames per clip), `object_names`, `motion_names`, and `fps`. The `MotionLoader` slices clips back out via the `motion_lengths` offsets and groups them by object.
+The packed npz contains the per-frame arrays `joint_pos`, `joint_vel`, `body_pos_w/quat_w/lin_vel_w/ang_vel_w`, `object_pos_w/quat_w/lin_vel_w/ang_vel_w`, `contact_label`, plus `motion_lengths` (frames per clip), `object_names`, `motion_names`, and `fps`. 
+The `MotionLoader` slices clips back out via the `motion_lengths` offsets and groups them by object.
 
 ---
 
@@ -121,7 +114,7 @@ python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 \
     --config-dir ./configs --config-name train
 ```
 
-`train.py` defaults to **headless mode** — no need to pass `--headless`.
+`train.py` defaults to **headless mode**.
 
 ### Inline overrides
 
@@ -172,8 +165,6 @@ Logs go to `logs/rsl_rl/g1_inspire_hoi/<timestamp>_<run_name>/`.
 | woodchair    | `train/woodchair_383clip.npz`   | `test/woodchair_54clip.npz`   |
 | **total**    | **3,436 clips (~5.9 h)**        | **415 clips (~38 min)**       |
 
-A figure of the train/test composition by object is in `data/plot/` (regenerate with `python data/plot/plot_distribution_stacked_bar.py`).
-
 ### TensorBoard
 
 ```bash
@@ -212,25 +203,6 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 `play.py` automatically:
 - runs in non-headless mode (GUI),
 - exports `policy.pt` (TorchScript) and `policy.onnx` to `<run_dir>/exported/`.
-
-> Note: each episode ends at `episode_length_s` (10 s = 500 steps) or a divergence
-> termination, independent of clip boundaries; the command walks through clips on
-> reset. To evaluate exactly one clip per episode you must terminate on clip end.
-
----
-
-## Sanity / Smoke Tests
-
-Verify env construction and observation shapes without RL — reuses the play
-config (single env, deterministic):
-
-```bash
-python scripts/zero_agent.py --task=G1-Inspire-HOI-v0 \
-    --config-dir ./configs --config-name play
-
-python scripts/random_agent.py --task=G1-Inspire-HOI-v0 \
-    --config-dir ./configs --config-name play
-```
 
 ---
 
