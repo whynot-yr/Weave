@@ -38,9 +38,9 @@ g1_hoi_learning/
     ├── assets/                   # G1 URDF + meshes
     ├── objects/                  # household object configs + USD/OBJ + surface.npy
     ├── robots/g1_inspire.py      # G1 + Inspire hand articulation cfg
-    └── tasks/manager_based/g1_hoi_learning/
+    └── tasks/hoi/
         ├── __init__.py           # gym.register with _make_env factory (per-npz object resolve)
-        ├── g1_hoi_learning_env_cfg.py   # ManagerBasedRLEnvCfg (scene/obs/act/rew/term)
+        ├── env_cfg.py            # ManagerBasedRLEnvCfg (scene/obs/act/rew/term)
         ├── agents/rsl_rl_ppo_cfg.py      # PPORunnerCfg (SimBa + MuonPPO knobs)
         └── mdp/                          # commands, observations, actions, rewards, terminations
 ```

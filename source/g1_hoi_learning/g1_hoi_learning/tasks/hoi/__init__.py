@@ -53,7 +53,7 @@ gym.register(
     entry_point=_make_env,
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.g1_hoi_learning_env_cfg:G1HoiLearningEnvCfg",
+        "env_cfg_entry_point": f"{__name__}.env_cfg:G1HoiLearningEnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
 )
