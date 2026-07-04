@@ -1,0 +1,112 @@
+# @package _global_
+#
+# DAgger distillation: distill the teacher tracker into a goal-conditioned SimBa student.
+#
+# Usage (point --load_run/--checkpoint at a trained G1-Inspire-HOI-v0 tracker run; its actor is
+# auto-loaded as the frozen teacher):
+#   python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-Distill-v0 --headless \
+#       --config-dir ./configs/distill --config-name train \
+#       --load_run <TRACKER_RUN_DIR> --checkpoint <model_XXXX.pt>
+#
+
+defaults:
+  - G1-Inspire-HOI-Distill-v0
+  - _self_
+
+# =============================================================================
+# Environment
+# =============================================================================
+
+env:
+  scene:
+    num_envs: 4096
+
+  commands:
+    motion:
+      motion_files:
+        - ./data/test/smalltable_42clip.npz
+      rsi: true
+      gap: [50, 200]                    # goal horizon range in frames (50 Hz -> [1.0, 4.0] s)
+      joint_position_range: [-0.1, 0.1]
+      pose_range:
+        x: [-0.05, 0.05]
+        y: [-0.05, 0.05]
+        z: [-0.01, 0.01]
+        roll: [-0.1, 0.1]
+        pitch: [-0.1, 0.1]
+        yaw: [-0.2, 0.2]
+      velocity_range:
+        x: [-0.5, 0.5]
+        y: [-0.5, 0.5]
+        z: [-0.2, 0.2]
+        roll: [-0.52, 0.52]
+        pitch: [-0.52, 0.52]
+        yaw: [-0.78, 0.78]
+
+  # ---- rewards ----
+  rewards:
+    motion_anchor_pos:    { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    motion_anchor_ori:    { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    motion_body_pos:      { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    object_pos:           { weight: 2.0, params: { command_name: motion, std: 0.2 } }
+    object_ori:           { weight: 2.0, params: { command_name: motion, std: 0.3 } }
+    contact:
+      weight: 2.0
+      params:
+        command_name: motion
+        sensor_name: contact_sensor
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
+        saturate_force: 5.0
+    action_rate_l2:       { weight: -0.1 }
+    joint_limit:          { weight: -10.0 }
+
+  # ---- termination thresholds ----
+  terminations:
+    anchor_pos:    { params: { command_name: motion, threshold: 0.25 } }
+    anchor_ori:    { params: { command_name: motion, threshold: 0.8  } }
+    object_pos:    { params: { command_name: motion, threshold: 0.25 } }
+    object_ori:    { params: { command_name: motion, threshold: 0.3  } }
+    ee_body_pos:
+      params:
+        command_name: motion
+        threshold: 0.25
+        body_names:
+          - left_ankle_roll_link
+          - right_ankle_roll_link
+          - left_wrist_yaw_link
+          - right_wrist_yaw_link
+    bad_contact:
+      params:
+        command_name: motion
+        sensor_name: contact_sensor
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
+        max_lost_frames: 10
+
+# =============================================================================
+# Agent (DAgger: SimBa student-teacher + MuonDistillation)
+# =============================================================================
+
+agent:
+  experiment_name: g1_inspire_hoi_distill
+  num_steps_per_env: 32
+  max_iterations: 100000
+  save_interval: 200
+
+  policy:
+    init_noise_std: 0.5
+    student_hidden_dim: 2048
+    teacher_hidden_dim: 2048
+    student_num_blocks: 2
+    teacher_num_blocks: 2
+    expansion: 1
+    student_obs_normalization: true
+    teacher_obs_normalization: true
+
+  algorithm:
+    learning_rate: 1.0e-3
+    num_learning_epochs: 1
+    gradient_length: 32
+    max_grad_norm: 1.0
+    loss_type: mse                   # "huber"
+    weight_decay: 0.01

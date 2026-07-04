@@ -1,0 +1,24 @@
+# Copyright (c) 2022-2026, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Goal-conditioned DAgger distillation task, 
+distilling the ``hoi`` tracker into a goal-conditioned student.
+"""
+
+import gymnasium as gym
+
+from g1_hoi_learning.tasks.hoi import _make_env
+
+from . import agents
+
+gym.register(
+    id="G1-Inspire-HOI-Distill-v0",
+    entry_point=_make_env,
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.env_cfg:G1HoiDistillEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_distill_cfg:DistillRunnerCfg",
+    },
+)
