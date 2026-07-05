@@ -84,7 +84,7 @@ env:
         max_lost_frames: 10
 
 # =============================================================================
-# Agent (DAgger: SimBa student-teacher + MuonDistillation)
+# Agent (distillation + RL: SimBa actor-critic + frozen teacher + MuonPPODistill)
 # =============================================================================
 
 agent:
@@ -95,18 +95,30 @@ agent:
 
   policy:
     init_noise_std: 0.5
-    student_hidden_dim: 2048
-    teacher_hidden_dim: 2048
-    student_num_blocks: 2
+    actor_hidden_dim: 2048
+    critic_hidden_dim: 2048
+    teacher_hidden_dim: 2048         
+    actor_num_blocks: 2
+    critic_num_blocks: 2
     teacher_num_blocks: 2
     expansion: 1
-    student_obs_normalization: true
+    actor_obs_normalization: true
+    critic_obs_normalization: true
     teacher_obs_normalization: true
 
   algorithm:
+    bc_coef: 1.0
+    bc_coef_decay: 1.0
     learning_rate: 1.0e-3
-    num_learning_epochs: 1
-    gradient_length: 32
+    schedule: adaptive
+    desired_kl: 0.01
+    entropy_coef: 5.0e-4
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    gamma: 0.99
+    lam: 0.95
+    clip_param: 0.2
+    use_clipped_value_loss: true
+    value_loss_coef: 1.0
     max_grad_norm: 1.0
-    loss_type: mse                   # "huber"
     weight_decay: 0.01

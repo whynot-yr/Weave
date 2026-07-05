@@ -9,6 +9,7 @@ from rsl_rl.modules import StudentTeacher
 from rsl_rl.networks import EmpiricalNormalization
 
 from g1_hoi_learning.algorithms.networks import SimBa
+from g1_hoi_learning.algorithms.ppo.networks import SimBaActorCritic
 
 
 class SimBaStudentTeacher(StudentTeacher):
@@ -93,3 +94,66 @@ class SimBaStudentTeacher(StudentTeacher):
 
         self.distribution = None
         Normal.set_default_validate_args(False)
+
+
+class SimBaActorCriticTeacher(SimBaActorCritic):
+    """SimBa actor-critic for the distillation+RL stage.
+    """
+
+    def __init__(
+        self,
+        obs: TensorDict,
+        obs_groups: dict[str, list[str]],
+        num_actions: int,
+        teacher_hidden_dim: int = 2048,
+        teacher_num_blocks: int = 2,
+        teacher_obs_normalization: bool = True,
+        expansion: int = 1,
+        **kwargs,
+    ) -> None:
+        super().__init__(obs, obs_groups, num_actions, expansion=expansion, **kwargs)  # actor + critic + std
+
+        # ----- teacher -----
+        num_teacher_obs = 0
+        for g in obs_groups["teacher"]:
+            assert len(obs[g].shape) == 2, "SimBaActorCriticTeacher only supports 1D observations."
+            num_teacher_obs += obs[g].shape[-1]
+        self.teacher = SimBa(
+            input_dim=num_teacher_obs,
+            output_dim=num_actions,
+            hidden_dim=teacher_hidden_dim,
+            num_blocks=teacher_num_blocks,
+            expansion=expansion,
+        )
+        self.teacher.eval()
+        for p in self.teacher.parameters():
+            p.requires_grad_(False)
+        print(f"Teacher SimBa: {self.teacher}")
+        self.teacher_obs_normalization = teacher_obs_normalization
+        self.teacher_obs_normalizer = (
+            EmpiricalNormalization(num_teacher_obs) if teacher_obs_normalization else nn.Identity()
+        )
+        self.loaded_teacher = False
+
+    def teacher_act(self, obs: TensorDict) -> torch.Tensor:
+        """Frozen-teacher action on the dense (teacher) obs group. Detached."""
+        x = self.teacher_obs_normalizer(torch.cat([obs[g] for g in self.obs_groups["teacher"]], dim=-1))
+        with torch.no_grad():
+            return self.teacher(x)
+
+    def load_state_dict(self, state_dict: dict, strict: bool = True) -> bool:
+        if any(k.startswith("teacher") for k in state_dict):
+            nn.Module.load_state_dict(self, state_dict, strict=strict)
+            self.loaded_teacher = True
+            return True
+        teacher_sd = {k[len("actor."):]: v for k, v in state_dict.items() if k.startswith("actor.")}
+        norm_sd = {
+            k[len("actor_obs_normalizer."):]: v
+            for k, v in state_dict.items()
+            if k.startswith("actor_obs_normalizer.")
+        }
+        self.teacher.load_state_dict(teacher_sd, strict=strict)
+        self.teacher_obs_normalizer.load_state_dict(norm_sd, strict=strict)
+        self.teacher.eval()
+        self.loaded_teacher = True
+        return False
