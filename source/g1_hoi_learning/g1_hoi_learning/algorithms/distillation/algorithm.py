@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -26,28 +27,23 @@ class MuonDistillation(Distillation):
 
 class MuonPPODistill(MuonPPO):
     """MuonPPO + a distillation (teacher-BC) term on the DENSE reward.
-
-    Combined loss per minibatch:  L_ppo (full Gaussian)  +  bc_coef * MSE(actor_mean, teacher_action).
-    The BC term anchors only the MEAN toward the frozen teacher; sigma is owned by PPO (entropy). The
-    teacher is frozen + deterministic, so it is recomputed from the stored obs each minibatch (no
-    RolloutStorage change). MuonPPO's ``MuonAdamWWrapper(ignore_frozen=True)`` already skips the
-    frozen teacher, so only actor+critic+std are optimized.
-
-    ``update()`` is a verbatim copy of ``rsl_rl.algorithms.PPO.update()`` with the BC term inserted;
-    keep it in sync if rsl_rl's PPO.update changes.
     """
 
     def __init__(
         self,
         policy,
-        bc_coef: float = 1.0,
-        bc_coef_decay: float = 1.0,
+        bc_coef: float = 0.3,
+        bc_coef_min: float = 0.05,
+        bc_coef_anneal_iters: int = 6000,
         weight_decay: float = 0.01,
         **kwargs: Any,
     ) -> None:
         super().__init__(policy, weight_decay=weight_decay, **kwargs)  # Muon over actor+critic (teacher skipped)
+        self.bc_coef_init = bc_coef
         self.bc_coef = bc_coef
-        self.bc_coef_decay = bc_coef_decay
+        self.bc_coef_min = bc_coef_min
+        self.bc_coef_anneal_iters = bc_coef_anneal_iters
+        self._it = 0
 
     def update(self) -> dict[str, float]:
         mean_value_loss = 0
@@ -259,8 +255,12 @@ class MuonPPODistill(MuonPPO):
         if mean_symmetry_loss is not None:
             mean_symmetry_loss /= num_updates
 
-        # Decay the distillation weight
-        self.bc_coef *= self.bc_coef_decay
+        self._it += 1
+        if self._it < self.bc_coef_anneal_iters:
+            cos = 0.5 * (1.0 + math.cos(math.pi * self._it / self.bc_coef_anneal_iters))
+            self.bc_coef = self.bc_coef_min + (self.bc_coef_init - self.bc_coef_min) * cos
+        else:
+            self.bc_coef = self.bc_coef_min
 
         # Clear the storage
         self.storage.clear()
@@ -271,6 +271,7 @@ class MuonPPODistill(MuonPPO):
             "surrogate": mean_surrogate_loss,
             "entropy": mean_entropy,
             "bc": mean_bc_loss,
+            "bc_coef": self.bc_coef,
         }
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss

@@ -107,8 +107,9 @@ agent:
     teacher_obs_normalization: true
 
   algorithm:
-    bc_coef: 1.0
-    bc_coef_decay: 1.0
+    bc_coef: 0.3
+    bc_coef_min: 0.05
+    bc_coef_anneal_iters: 6000
     learning_rate: 1.0e-3
     schedule: adaptive
     desired_kl: 0.01

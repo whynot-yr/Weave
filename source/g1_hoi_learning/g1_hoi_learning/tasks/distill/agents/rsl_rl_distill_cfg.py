@@ -36,9 +36,10 @@ class ActorCriticTeacherCfg(RslRlPpoActorCriticCfg):
 class MuonPPODistillCfg(RslRlPpoAlgorithmCfg):
     class_name: str = "MuonPPODistill"
     weight_decay: float = 0.01
-    bc_coef: float = 1.0            
-    bc_coef_decay: float = 1.0      
-    
+    bc_coef: float = 0.3
+    bc_coef_min: float = 0.05        
+    bc_coef_anneal_iters: int = 6000
+
     value_loss_coef: float = 1.0
     use_clipped_value_loss: bool = True
     clip_param: float = 0.2
