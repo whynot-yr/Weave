@@ -33,6 +33,8 @@ class SimBa(nn.Module):
         expansion: int = 4,
     ) -> None:
         super().__init__()
+        self.in_features = input_dim
+        self.out_features = output_dim
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.blocks = nn.Sequential(*[SimBaBlock(hidden_dim, expansion) for _ in range(num_blocks)])
         self.post_norm = nn.LayerNorm(hidden_dim)

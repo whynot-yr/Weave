@@ -12,6 +12,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 from . import mdp
 from .mdp.commands import MotionCommandCfg
@@ -153,39 +154,59 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """Observation specifications for the MDP."""
+    """Observation groups::
+
+        actor  = ref_motion_body + ref_motion_object + object_state + robot_proprio
+        critic = ref_motion_body + ref_motion_object + object_state + robot_privileged
+    """
 
     @configclass
-    class PolicyCfg(ObsGroup):
-        """Observations for policy group."""
+    class RefMotionBodyCfg(ObsGroup):
+        """Dense future reference of the robot bodies."""
 
-        # reference motion
         motion_future_joint_pos = ObsTerm(func=mdp.motion_future_joint_pos, params={"command_name": "motion"})
         motion_future_joint_vel = ObsTerm(func=mdp.motion_future_joint_vel, params={"command_name": "motion"})
-        # reference body tracking (current + future)
         motion_future_anchor_pos_b = ObsTerm(func=mdp.motion_future_anchor_pos_b, params={"command_name": "motion"})
         motion_future_anchor_ori_b = ObsTerm(func=mdp.motion_future_anchor_ori_b, params={"command_name": "motion"})
         motion_future_body_pos_b = ObsTerm(func=mdp.motion_future_body_pos_b, params={"command_name": "motion"})
         motion_future_body_ori_b = ObsTerm(func=mdp.motion_future_body_ori_b, params={"command_name": "motion"})
-        # reference object tracking (current + future)
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class RefMotionObjectCfg(ObsGroup):
+        """Dense future reference of the object, plus the reference contact labels."""
+
         motion_future_obj_pos_b = ObsTerm(func=mdp.motion_future_obj_pos_b, params={"command_name": "motion"})
         motion_future_obj_ori_b = ObsTerm(func=mdp.motion_future_obj_ori_b, params={"command_name": "motion"})
-        # reference contact
         motion_future_contact_label = ObsTerm(func=mdp.motion_future_contact_label, params={"command_name": "motion"})
-        contact = ObsTerm(func=mdp.contact, params={"sensor_name": "contact_sensor"})
-        # robot state
-        body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})
-        body_ori = ObsTerm(func=mdp.robot_body_ori_b, params={"command_name": "motion"})
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        # object state (current + future)
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class ObjectStateCfg(ObsGroup):
+        """Live object pose/shape, robot-object relational features, and live contact."""
+
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
         object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
         object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
-        # robot proprioception
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        contact = ObsTerm(func=mdp.contact, params={"sensor_name": "contact_sensor"})
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class RobotProprioCfg(ObsGroup):
+        """Deployable proprioception.
+        """
+
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -193,40 +214,29 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     @configclass
-    class CriticCfg(ObsGroup):
-        """Observations for critic (same as policy)."""
+    class RobotPrivilegedCfg(ObsGroup):
+        """Ground-truth proprioception plus privileged information.
+        """
 
-        # reference motion (current + future)
-        motion_future_joint_pos = ObsTerm(func=mdp.motion_future_joint_pos, params={"command_name": "motion"})
-        motion_future_joint_vel = ObsTerm(func=mdp.motion_future_joint_vel, params={"command_name": "motion"})
-        # reference body tracking (current + future)
-        motion_future_anchor_pos_b = ObsTerm(func=mdp.motion_future_anchor_pos_b, params={"command_name": "motion"})
-        motion_future_anchor_ori_b = ObsTerm(func=mdp.motion_future_anchor_ori_b, params={"command_name": "motion"})
-        motion_future_body_pos_b = ObsTerm(func=mdp.motion_future_body_pos_b, params={"command_name": "motion"})
-        motion_future_body_ori_b = ObsTerm(func=mdp.motion_future_body_ori_b, params={"command_name": "motion"})
-        # reference object tracking (current + future)
-        motion_future_obj_pos_b = ObsTerm(func=mdp.motion_future_obj_pos_b, params={"command_name": "motion"})
-        motion_future_obj_ori_b = ObsTerm(func=mdp.motion_future_obj_ori_b, params={"command_name": "motion"})
-        # contact (reference + sim)
-        motion_future_contact_label = ObsTerm(func=mdp.motion_future_contact_label, params={"command_name": "motion"})
-        contact = ObsTerm(func=mdp.contact, params={"sensor_name": "contact_sensor"})
-        # robot state
-        body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})
-        body_ori = ObsTerm(func=mdp.robot_body_ori_b, params={"command_name": "motion"})
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        # object state (current + future)
-        object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
-        object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
-        object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
-        object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
-        # robot proprioception
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity)
         actions = ObsTerm(func=mdp.last_action)
 
-    policy: PolicyCfg = PolicyCfg()
-    critic: CriticCfg = CriticCfg()
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        body_pos = ObsTerm(func=mdp.robot_body_pos_b, params={"command_name": "motion"})
+        body_ori = ObsTerm(func=mdp.robot_body_ori_b, params={"command_name": "motion"})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    ref_motion_body: RefMotionBodyCfg = RefMotionBodyCfg()
+    ref_motion_object: RefMotionObjectCfg = RefMotionObjectCfg()
+    object_state: ObjectStateCfg = ObjectStateCfg()
+    robot_proprio: RobotProprioCfg = RobotProprioCfg()
+    robot_privileged: RobotPrivilegedCfg = RobotPrivilegedCfg()
 
 @configclass
 class EventCfg:

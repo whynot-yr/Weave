@@ -517,7 +517,7 @@ class MotionCommandCfg(CommandTermCfg):
         "right_shoulder_roll_link", "right_elbow_link", "right_wrist_yaw_link",
     ]
 
-    future_offsets: list[int] = [0, 1, 2, 4, 8]
+    future_offsets: list[int] = [0, 5, 10, 15, 20]
     """Frame offsets for observation (0 = current frame)."""
 
     rsi: bool = True

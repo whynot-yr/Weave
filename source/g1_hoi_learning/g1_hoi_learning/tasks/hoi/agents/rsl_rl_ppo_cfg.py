@@ -31,6 +31,15 @@ class SimBaActorCriticCfg(RslRlPpoActorCriticCfg):
     critic_num_blocks: int = 2
     expansion: int = 1
 
+    latent_dim: int = 256
+    encoder_hidden_dims: dict[str, list[int]] = {
+        "ref_motion_body": [1024, 512],
+        "ref_motion_object": [512],
+        "object_state": [1024, 512],
+        "robot_proprio": [512],
+        "robot_privileged": [512],
+    }
+
 
 @configclass
 class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
@@ -38,6 +47,10 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 2000
     save_interval = 100
     experiment_name = "g1_inspire_hoi"
+    obs_groups: dict = {
+        "policy": ["ref_motion_body", "ref_motion_object", "object_state", "robot_proprio"],
+        "critic": ["ref_motion_body", "ref_motion_object", "object_state", "robot_privileged"],
+    }
     policy = SimBaActorCriticCfg(
         init_noise_std=0.5,
         actor_obs_normalization=True,
@@ -47,6 +60,7 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         actor_num_blocks=2,
         critic_num_blocks=2,
         expansion=1,
+        latent_dim=256,
     )
     algorithm = MuonPpoAlgorithmCfg(
         value_loss_coef=1.0,
