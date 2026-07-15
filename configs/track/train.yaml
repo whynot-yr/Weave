@@ -2,7 +2,7 @@
 #
 # Usage:
 #   python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 --headless \
-#       --config-dir ./configs --config-name train
+#       --config-dir ./configs/track --config-name train
 #
 # Override anything inline:
 #   ... --config-name train env.scene.num_envs=2048 agent.max_iterations=500
@@ -22,18 +22,17 @@ env:
   commands:
     motion:
       motion_files:
-        # - ./data/train/clothesstand_311clip.npz
-        # - ./data/train/floorlamp_289clip.npz
-        # - ./data/train/largebox_287clip.npz
-        # - ./data/train/largetable_270clip.npz
-        # - ./data/train/smallbox_252clip.npz
-        # - ./data/train/smalltable_279clip.npz
-        # - ./data/train/suitcase_290clip.npz
-        # - ./data/train/trashcan_253clip.npz
-        # - ./data/train/tripod_429clip.npz
-        # - ./data/train/whitechair_393clip.npz
-        # - ./data/train/woodchair_383clip.npz
-        - ./data/test/smalltable_42clip.npz
+        - ./data/train/clothesstand_311clip.npz
+        - ./data/train/floorlamp_289clip.npz
+        - ./data/train/largebox_287clip.npz
+        - ./data/train/largetable_270clip.npz
+        - ./data/train/smallbox_252clip.npz
+        - ./data/train/smalltable_279clip.npz
+        - ./data/train/suitcase_290clip.npz
+        - ./data/train/trashcan_253clip.npz
+        - ./data/train/tripod_429clip.npz
+        - ./data/train/whitechair_393clip.npz
+        - ./data/train/woodchair_383clip.npz
       rsi: true
       joint_position_range: [-0.1, 0.1]
       pose_range:
@@ -50,6 +49,9 @@ env:
         roll: [-0.52, 0.52]
         pitch: [-0.52, 0.52]
         yaw: [-0.78, 0.78]
+      object_range:
+        x: [-0.05, 0.05]
+        y: [-0.05, 0.05]
 
   # ---- reward weights & params ----
   rewards:
@@ -67,6 +69,7 @@ env:
         hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
         saturate_force: 5.0
     action_rate_l2:       { weight: -0.1 }
+    feet_slide:           { weight: -0.1 }
     joint_limit:          { weight: -10.0 }
 
   # ---- termination thresholds ----

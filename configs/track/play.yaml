@@ -5,7 +5,7 @@
 #
 # Usage:
 #   python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
-#       --config-dir ./configs --config-name play
+#       --config-dir ./configs/track --config-name play
 #
 # Switch object: edit motion_files below, or override inline:
 #   ... --config-name play env.commands.motion.motion_files=[./data/example_data/floorlamp.npz]

@@ -95,3 +95,4 @@ source/g1_hoi_learning/g1_hoi_learning/objects/*
 
 # model file
 *.pt
+*.pth

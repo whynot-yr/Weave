@@ -5,6 +5,8 @@ import torch
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, subtract_frame_transforms, transform_points
 
+from g1_hoi_learning.models.object_encoder import get_object_encoder
+
 from .commands import MotionCommand
 
 
@@ -210,8 +212,8 @@ def motion_future_obj_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Te
 
 
 def object_point_cloud_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Object surface point cloud expressed in the robot anchor frame.
-    (num_envs, P * 3), where P is the per-object surface-sample count.
+    """Frozen PointNet++ embedding of the object surface point cloud.
+    Returns (num_envs, encoder.output_dim).
     """
     command: MotionCommand = env.command_manager.get_term(command_name)
     # per-env surface points: pick this env's object's surface from (N, P, 3)
@@ -219,13 +221,12 @@ def object_point_cloud_b(env: ManagerBasedEnv, command_name: str) -> torch.Tenso
     # surface points: object frame -> world
     pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
     P = pts_w.shape[1]
-    # world -> anchor frame: these are POINTS, so subtract the anchor origin BEFORE rotating
-    # (unlike the body->surface vectors, which are translation-invariant and only need rotation).
+    
     pts_b = quat_apply_inverse(
         command.robot_anchor_quat_w[:, None, :].expand(-1, P, -1),
         pts_w - command.robot_anchor_pos_w[:, None, :],
     )
-    return pts_b.reshape(env.num_envs, -1)
+    return get_object_encoder(pts_b.device)(pts_b)   # (num_envs, output_dim)
 
 def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     """Per-body vector from each robot body to its nearest point on the object surface,

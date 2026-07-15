@@ -93,6 +93,12 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
         ],
     )
 
+    feet_contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*_ankle_roll_link",
+        history_length=3,
+        track_air_time=False,
+    )
+
 
 ##
 # MDP settings
@@ -124,6 +130,10 @@ class CommandsCfg:
             "yaw": (-0.78, 0.78),
         },
         joint_position_range=(-0.1, 0.1),
+        object_range={
+            "x": (-0.05, 0.05),
+            "y": (-0.05, 0.05),
+        },
     )
 
 
@@ -334,6 +344,14 @@ class RewardsCfg:
     )
     # regularization
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
+    feet_slide = RewTerm(
+        func=mdp.feet_slide,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link"),
+        },
+    )
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
@@ -407,7 +425,7 @@ class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self) -> None:
         """Post initialization."""
         self.decimation = 4
-        self.episode_length_s = 10.0
+        self.episode_length_s = 20.0
         self.viewer.eye = (-3.0, -3.0, 2.0)
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "robot"

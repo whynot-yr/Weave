@@ -35,7 +35,7 @@ class SimBaActorCriticCfg(RslRlPpoActorCriticCfg):
     encoder_hidden_dims: dict[str, list[int]] = {
         "ref_motion_body": [1024, 512],
         "ref_motion_object": [512],
-        "object_state": [1024, 512],
+        "object_state": [512],
         "robot_proprio": [512],
         "robot_privileged": [512],
     }

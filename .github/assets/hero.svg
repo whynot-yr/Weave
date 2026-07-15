@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="100%" role="img" aria-label="G1 HOI Learning — contact-aware human-object interaction imitation">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1022"/>
+      <stop offset="0.55" stop-color="#141033"/>
+      <stop offset="1" stop-color="#1b1440"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#818cf8"/>
+      <stop offset="0.5" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#fb7185"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#c7d2fe"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.7" cy="0.4" r="0.7">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dot" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f9a8d4"/>
+      <stop offset="1" stop-color="#fb7185"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="300" rx="22" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="300" rx="22" fill="url(#glow)"/>
+
+  <!-- motif: reference object (ghost) → tracked object + hand-contact points -->
+  <g transform="translate(0,6)">
+    <!-- reference (ghost) pose -->
+    <rect x="1000" y="78" width="112" height="112" rx="16" fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="6 7" opacity="0.42"/>
+    <!-- tracked pose -->
+    <rect x="972" y="104" width="112" height="112" rx="16" fill="url(#glow)" stroke="#818cf8" stroke-width="2.5" opacity="0.9"/>
+    <!-- contact points on the tracked object -->
+    <g>
+      <circle cx="972" cy="140" r="9" fill="#fb7185" opacity="0.18"/><circle cx="972" cy="140" r="4.5" fill="url(#dot)"/>
+      <circle cx="972" cy="182" r="9" fill="#fb7185" opacity="0.18"/><circle cx="972" cy="182" r="4.5" fill="url(#dot)"/>
+      <circle cx="1028" cy="104" r="9" fill="#fb7185" opacity="0.18"/><circle cx="1028" cy="104" r="4.5" fill="url(#dot)"/>
+      <circle cx="1084" cy="170" r="9" fill="#fb7185" opacity="0.18"/><circle cx="1084" cy="170" r="4.5" fill="url(#dot)"/>
+    </g>
+    <!-- faint finger hints reaching two contact points -->
+    <g stroke="#93c5fd" stroke-width="2" fill="none" opacity="0.32" stroke-linecap="round">
+      <path d="M884 150 Q930 138 972 140"/>
+      <path d="M884 178 Q930 182 972 182"/>
+    </g>
+    <circle cx="884" cy="150" r="3" fill="#93c5fd" opacity="0.5"/>
+    <circle cx="884" cy="178" r="3" fill="#93c5fd" opacity="0.5"/>
+  </g>
+
+  <!-- title block -->
+  <text x="64" y="120" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="62" font-weight="800" letter-spacing="-1" fill="url(#ink)">G1 · HOI Learning</text>
+  <rect x="66" y="142" width="238" height="5" rx="2.5" fill="url(#accent)"/>
+  <text x="66" y="188" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" fill="#9aa6c4">Contact-aware human–object interaction imitation</text>
+  <text x="66" y="218" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" fill="#9aa6c4">for the Unitree G1 + Inspire dexterous hands</text>
+  <text x="66" y="262" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" letter-spacing="2" fill="#6b7391">ISAAC SIM 5.1  ·  ISAAC LAB 2.3.2  ·  RSL-RL  ·  SIMBA + MUONPPO</text>
+</svg>

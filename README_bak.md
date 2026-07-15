@@ -1,56 +1,13 @@
-<div align="center">
+# G1 HOI Learning
 
-<img src=".github/assets/hero.svg" width="100%" alt="G1 · HOI Learning" />
+Isaac Lab extension for **Unitree G1 + Inspire dexterous hands** human-object-interaction (HOI) motion imitation. 
+A single PPO policy learns to mimic mocap-retargeted reference motions of the robot manipulating one or more household objects (tripod, suitcase, chairs, boxes, ...) while satisfying contact constraints on the hands.
 
-<p>
-  <img src="https://img.shields.io/badge/Isaac%20Sim-5.1.0-76B900?logo=nvidia&logoColor=white" alt="Isaac Sim 5.1.0" />
-  <img src="https://img.shields.io/badge/Isaac%20Lab-2.3.2-5a4fcf" alt="Isaac Lab 2.3.2" />
-  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11" />
-  <img src="https://img.shields.io/badge/PyTorch-cu130-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch cu130" />
-  <img src="https://img.shields.io/badge/RL-RSL--RL-8A2BE2" alt="RSL-RL" />
-</p>
-
-<b>A single RL policy learns to reproduce mocap-retargeted manipulation motion on a Unitree G1 with Inspire dexterous hands — matching body pose, object pose, and hand contacts.</b>
-
-<sub>
-  <a href="#-highlights">Highlights</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="#-installation">Installation</a> ·
-  <a href="#-data-pipeline">Data Pipeline</a> ·
-  <a href="#-training">Training</a> ·
-  <a href="#-evaluation--play">Play</a>
-</sub>
-
-</div>
+Built on top of Isaac Sim 5.1.0 + Isaac Lab 2.3.2 + RSL-RL.
 
 ---
 
-## ✨ Highlights
-
-- **Contact-aware imitation** — tracks the reference body + object trajectory *and* the per-hand contact labels, so the policy grasps when (and where) the reference does.
-- **Dexterous bimanual control** — G1 body + 2× Inspire hands; the passive finger joints are driven from a software mimic table, so the policy commands only the active DoF.
-- **SimBa + MuonPPO** — a residual-MLP actor-critic trained by a Muon (2-D weights) / AdamW (rest) hybrid PPO, with per-observation-group encoders and an asymmetric actor/critic.
-- **Multi-object, multi-clip** — round-robin object assignment across thousands of reference clips in a single training run.
-- **RSI + domain randomization** — reset to a random clip and frame with small robot pose/velocity/joint and object-position perturbations.
-- **Object shape conditioning** — each object's surface is embedded by a frozen PointNet++ into a compact descriptor.
-
-## 🧭 Architecture
-
-```mermaid
-graph LR
-  A["Retargeted mocap"] -->|data replay| B["Multi-clip npz"]
-  B --> C["MotionLoader + RSI"]
-  C --> D["Parallel envs"]
-  D -->|obs groups| E["Per-group encoders"]
-  E --> F["SimBa actor-critic"]
-  F -->|MuonPPO| G["Policy"]
-  G -->|actions| D
-  G -.->|export| H["JIT / ONNX"]
-```
-
----
-
-## 📁 Project Layout
+## Project Layout
 
 ```
 g1_hoi_learning/
@@ -91,7 +48,7 @@ g1_hoi_learning/
 
 ---
 
-## 🔧 Installation
+## Installation
 
 1. Install Isaac Lab via the [official guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). This project assumes **Isaac Sim 5.1 + Isaac Lab 2.3.2 + Python 3.11 + PyTorch 2.11+**.
 
@@ -123,8 +80,7 @@ g1_hoi_learning/
    **If they differ** (this repo's setup: PyTorch **cu130** but system `nvcc` is 12.x), install a matching CUDA-13 toolchain into the venv and build against it. The steps below are verified for **PyTorch cu130 + RTX 4090 (sm_89)**:
 
    ```bash
-   # (a) CUDA-13 compiler toolchain — pin every piece to 13.0.x so nvcc / cicc (nvvm) /
-   #     cccl headers agree (a version skew gives "PTX .version" or CCCL header errors)
+   # (a) CUDA-13 compiler toolchain
    python -m pip install \
        "nvidia-cuda-nvcc==13.0.88" "nvidia-nvvm==13.0.88" \
        "nvidia-cuda-crt==13.0.88" "nvidia-cuda-cccl==13.0.85"
@@ -160,7 +116,7 @@ g1_hoi_learning/
 
 ---
 
-## 🧩 Data Pipeline
+## Data Pipeline
 
 ### Step 1 — sample surface points
 
@@ -186,7 +142,7 @@ python scripts/data_replay_multiple.py \
 
 ---
 
-## 🚀 Training
+## Training
 
 Training uses a **Hydra YAML config** (`configs/track/train.yaml`) that overrides the registered base task. Edit the YAML to change motion files, num_envs, reward weights, network size, etc. The default config trains across all 11 objects in `data/train/`.
 
@@ -238,7 +194,7 @@ tensorboard --logdir logs/rsl_rl --port 6006
 
 ---
 
-## 🎬 Evaluation & Play
+## Evaluation / Play
 
 Eval uses `configs/track/play.yaml`, which inherits from `train.yaml` and overrides
 `num_envs=1` and turns off RSI / reset perturbations for deterministic playback.
@@ -270,7 +226,7 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 
 ---
 
-## 🧹 Code Formatting
+## Code Formatting
 
 ```bash
 pip install pre-commit
