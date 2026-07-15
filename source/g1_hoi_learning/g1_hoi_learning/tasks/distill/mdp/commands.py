@@ -58,6 +58,15 @@ class GoalMotionCommand(MotionCommand):
     def goal_obj_quat_w(self) -> torch.Tensor:
         return self._goal_frame.object_quat_w
 
+    # ----- goal-frame root/anchor pose (frame j) -----
+    @property
+    def goal_root_pos_w(self) -> torch.Tensor:
+        return self._goal_frame.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins
+
+    @property
+    def goal_root_quat_w(self) -> torch.Tensor:
+        return self._goal_frame.body_quat_w[:, self.anchor_index]
+
     # ----- debug viz: current object pose + goal object pose -----
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
@@ -85,7 +94,5 @@ class GoalMotionCommand(MotionCommand):
 class GoalMotionCommandCfg(MotionCommandCfg):
     class_type: type = GoalMotionCommand
 
-    """Goal horizon range [min, max] in frames: 
-    goal frame j = i + d, d ~ U[gap[0], gap[1]]
-    (50 Hz -> [50, 200] = [1.0, 4.0] s)."""
+    """Goal horizon range [min, max] in frames"""
     gap: tuple[int, int] = (50, 200)

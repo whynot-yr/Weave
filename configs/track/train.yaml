@@ -34,7 +34,7 @@ env:
         - ./data/train/whitechair_393clip.npz
         - ./data/train/woodchair_383clip.npz
       rsi: true
-      joint_position_range: [-0.1, 0.1]
+      joint_position_range: [-0.05, 0.05]
       pose_range:
         x: [-0.05, 0.05]
         y: [-0.05, 0.05]

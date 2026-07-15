@@ -25,12 +25,32 @@ def goal_object_rot_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     """Object orientation residual (current -> goal), in the robot anchor frame."""
     command: GoalMotionCommand = env.command_manager.get_term(command_name)
     _, obj_b = subtract_frame_transforms(
-        command.robot_anchor_pos_w, command.robot_anchor_quat_w, 
+        command.robot_anchor_pos_w, command.robot_anchor_quat_w,
         command.obj_pos_w, command.obj_quat_w
     )
     _, goal_b = subtract_frame_transforms(
-        command.robot_anchor_pos_w, command.robot_anchor_quat_w, 
+        command.robot_anchor_pos_w, command.robot_anchor_quat_w,
         command.goal_obj_pos_w, command.goal_obj_quat_w
     )
     dquat = quat_mul(goal_b, quat_conjugate(obj_b))
     return matrix_from_quat(dquat)[..., :2].reshape(env.num_envs, -1)
+
+
+def goal_root_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Root (anchor) position residual (current -> goal), in the robot anchor frame."""
+    command: GoalMotionCommand = env.command_manager.get_term(command_name)
+    pos_b, _ = subtract_frame_transforms(
+        command.robot_anchor_pos_w, command.robot_anchor_quat_w,
+        command.goal_root_pos_w, command.goal_root_quat_w,
+    )
+    return pos_b.view(env.num_envs, -1)
+
+
+def goal_root_rot_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Root (anchor) orientation goal (current -> goal), in the robot anchor frame."""
+    command: GoalMotionCommand = env.command_manager.get_term(command_name)
+    _, goal_b = subtract_frame_transforms(
+        command.robot_anchor_pos_w, command.robot_anchor_quat_w,
+        command.goal_root_pos_w, command.goal_root_quat_w,
+    )
+    return matrix_from_quat(goal_b)[..., :2].reshape(env.num_envs, -1)

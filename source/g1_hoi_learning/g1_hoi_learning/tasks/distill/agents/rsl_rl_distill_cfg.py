@@ -31,6 +31,17 @@ class ActorCriticTeacherCfg(RslRlPpoActorCriticCfg):
     init_noise_std: float = 0.5
     noise_std_type: str = "scalar"
 
+    latent_dim: int = 256
+    encoder_hidden_dims: dict[str, list[int]] = {
+        "ref_motion_body": [1024, 512],
+        "ref_motion_object": [512],
+        "object_state": [512],
+        "robot_proprio": [512],
+        "robot_privileged": [512],
+        "goal_root": [256],
+        "goal_object": [256],
+    }
+
 
 @configclass
 class MuonPPODistillCfg(RslRlPpoAlgorithmCfg):
@@ -62,6 +73,10 @@ class DistillRunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations: int = 100000
     save_interval: int = 200
     
-    obs_groups: dict = {"policy": ["policy"], "critic": ["teacher"], "teacher": ["teacher"]}
+    obs_groups: dict = {
+        "policy": ["goal_root", "goal_object", "object_state", "robot_proprio"],
+        "critic": ["ref_motion_body", "ref_motion_object", "object_state", "robot_privileged"],
+        "teacher": ["ref_motion_body", "ref_motion_object", "object_state", "robot_proprio"],
+    }
     policy: ActorCriticTeacherCfg = ActorCriticTeacherCfg()
     algorithm: MuonPPODistillCfg = MuonPPODistillCfg()

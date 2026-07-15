@@ -47,6 +47,24 @@ class GroupEncoder(nn.Module):
         return torch.cat(latents, dim=-1)
 
 
+def build_group_backbone(
+    obs: TensorDict,
+    groups: list[str],
+    encoder_hidden_dims: dict[str, list[int]],
+    latent_dim: int,
+    output_dim: int,
+    hidden_dim: int,
+    num_blocks: int,
+    expansion: int,
+) -> nn.Sequential:
+    """Per-group encoder bank -> SimBa backbone: ``nn.Sequential(GroupEncoder, SimBa)``."""
+    group_dims = [obs[g].shape[-1] for g in groups]
+    hidden_dims = [encoder_hidden_dims[g] for g in groups]
+    encoder = GroupEncoder(group_dims, hidden_dims, latent_dim)
+    backbone = SimBa(encoder.out_features, output_dim, hidden_dim, num_blocks, expansion)
+    return nn.Sequential(encoder, backbone)
+
+
 class SimBaActorCritic(ActorCritic):
     """Actor-critic with SimBa backbones.
     """
@@ -89,15 +107,11 @@ class SimBaActorCritic(ActorCritic):
 
         self.state_dependent_std = False
 
-        def build(groups: list[str], output_dim: int, hidden_dim: int, num_blocks: int) -> nn.Sequential:
-            group_dims = [obs[g].shape[-1] for g in groups]
-            hidden_dims = [encoder_hidden_dims[g] for g in groups]
-            encoder = GroupEncoder(group_dims, hidden_dims, latent_dim)
-            backbone = SimBa(encoder.out_features, output_dim, hidden_dim, num_blocks, expansion)
-            return nn.Sequential(encoder, backbone)
-
         # Actor
-        self.actor = build(obs_groups["policy"], num_actions, actor_hidden_dim, actor_num_blocks)
+        self.actor = build_group_backbone(
+            obs, obs_groups["policy"], encoder_hidden_dims, latent_dim,
+            num_actions, actor_hidden_dim, actor_num_blocks, expansion,
+        )
         print(f"Actor SimBa: {self.actor}")
 
         self.actor_obs_normalization = actor_obs_normalization
@@ -107,7 +121,10 @@ class SimBaActorCritic(ActorCritic):
             self.actor_obs_normalizer = torch.nn.Identity()
 
         # Critic
-        self.critic = build(obs_groups["critic"], 1, critic_hidden_dim, critic_num_blocks)
+        self.critic = build_group_backbone(
+            obs, obs_groups["critic"], encoder_hidden_dims, latent_dim,
+            1, critic_hidden_dim, critic_num_blocks, expansion,
+        )
         print(f"Critic SimBa: {self.critic}")
 
         self.critic_obs_normalization = critic_obs_normalization
