@@ -93,17 +93,46 @@ g1_hoi_learning/
 
 ## 🔧 Installation
 
-1. Install Isaac Lab via the [official guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). This project assumes **Isaac Sim 5.1 + Isaac Lab 2.3.2 + Python 3.11 + PyTorch 2.11+**.
+1. Install [uv](https://docs.astral.sh/uv/#installation) by
 
-2. Clone this repo outside the `IsaacLab` directory.
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    uv venv --python 3.11 sim51
+    ```
 
-3. Install the extension in editable mode using your Isaac Lab Python interpreter:
+2. Install [Isaac Sim 5.1](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/download.html) and follow the steps in [Installation](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/install_workstation.html)
 
-   ```bash
-   python -m pip install -e source/g1_hoi_learning
-   ```
+    ```bash
+    mkdir $workspace/isaacsim
+    # take x86_64 as an example
+    unzip "isaac-sim-standalone-5.1.0-linux-x86_64.zip" -d $workspace/isaacsim
+    cd $workspace/isaacsim
+    ./post_install.sh
+    export ISAACSIM=$workspace/isaacsim
+    ```
 
-4. Sideline Isaac Sim's bundled torch/torchvision/nvidia (required for Muon optimizer + venv torch ABI):
+3. Clone the [IsaacLab](https://github.com/isaac-sim/IsaacLab) repository and checkout to commit `e1731280`
+
+4. Install IsaacSim and IsaacLab in the `sim51` venv
+
+    ```bash
+    # enter the cloned repository
+    cd IsaacLab
+    # create a symbolic link
+    ln -s ${ISAACSIM} _isaac_sim
+
+    ./isaaclab.sh --uv sim51
+
+    ./isaaclab.sh -i rsl_rl
+    ```
+
+5. Install [torch>=2.10](https://pytorch.org/get-started/locally/)
+
+    ```bash
+    uv pip3 install torch torchvision
+    ```
+
+6. Sideline Isaac Sim's bundled torch/torchvision/nvidia (required for Muon optimizer + venv torch ABI):
 
    ```bash
    PREBUNDLE=$ISAACSIM/exts/omni.isaac.ml_archive/pip_prebundle
@@ -112,7 +141,15 @@ g1_hoi_learning/
    mv $PREBUNDLE/nvidia      $PREBUNDLE/nvidia.bak
    ```
 
-5. Build the **PointNet++ CUDA ops** required by the object point-cloud encoder. This compiles a CUDA extension, so it needs an `nvcc` whose **major** version matches your venv PyTorch's CUDA build.
+7. Clone this repo outside the `IsaacLab` directory.
+
+8. Install the extension in editable mode using your Isaac Lab Python interpreter:
+
+   ```bash
+   python -m pip install -e source/g1_hoi_learning
+   ```
+
+9. Build the **PointNet++ CUDA ops** required by the object point-cloud encoder. This compiles a CUDA extension, so it needs an `nvcc` whose **major** version matches your venv PyTorch's CUDA build.
 
    **If your system `nvcc` already matches** (e.g. both CUDA 12.x), it's a one-liner:
 
@@ -152,7 +189,7 @@ g1_hoi_learning/
    "
    ```
 
-6. Verify:
+10. Verify:
 
    ```bash
    python scripts/list_envs.py
