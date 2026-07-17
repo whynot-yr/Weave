@@ -331,6 +331,16 @@ class RewardsCfg:
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
     )
+    # hand-object relative position (hand bodies in the object frame)
+    hand_obj_rel_pos = RewTerm(
+        func=mdp.motion_hand_obj_relative_pos_error_exp,
+        weight=2.0,
+        params={
+            "command_name": "motion",
+            "hand_body_names": [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"],
+            "std": 0.1,
+        },
+    )
     # contact
     contact = RewTerm(
         func=mdp.contact_reward,
