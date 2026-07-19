@@ -17,7 +17,7 @@ env:
       motion_files:
         - ./data/test/smalltable_42clip.npz
       rsi: false
-      gap: [50, 200]
+      gap: [50, null]
       joint_position_range: [0.0, 0.0]
       pose_range:
         x: [0.0, 0.0]

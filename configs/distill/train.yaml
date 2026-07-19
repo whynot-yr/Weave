@@ -26,7 +26,7 @@ env:
       motion_files:
         - ./data/test/smalltable_42clip.npz
       rsi: true
-      gap: [50, 1000]
+      gap: [50, null]
       joint_position_range: [-0.05, 0.05]
       pose_range:
         x: [-0.05, 0.05]
@@ -54,6 +54,12 @@ env:
     motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
     object_pos:           { weight: 2.0, params: { command_name: motion, std: 0.2 } }
     object_ori:           { weight: 2.0, params: { command_name: motion, std: 0.3 } }
+    hand_obj_rel_pos:
+      weight: 2.0
+      params:
+        command_name: motion
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
+        std: 0.1
     contact:
       weight: 2.0
       params:
@@ -62,7 +68,7 @@ env:
         hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
         saturate_force: 5.0
     action_rate_l2:       { weight: -0.1 }
-    feet_slide:           { weight: -0.1 }
+    feet_slide:           { weight: -1.0 }
     joint_limit:          { weight: -10.0 }
 
   # ---- termination thresholds ----
@@ -99,13 +105,22 @@ agent:
 
   policy:
     init_noise_std: 0.5
-    actor_hidden_dim: 2048
-    critic_hidden_dim: 2048
-    teacher_hidden_dim: 2048         
-    actor_num_blocks: 2
+    actor_hidden_dim: 1024
+    critic_hidden_dim: 1024
+    teacher_hidden_dim: 1024
+    actor_num_blocks: 1
     critic_num_blocks: 2
-    teacher_num_blocks: 2
-    expansion: 1
+    teacher_num_blocks: 1
+    expansion: 4
+    latent_dim: 128
+    encoder_hidden_dims:
+      ref_motion_body: [512, 256]
+      ref_motion_object: [256]
+      object_state: [256]
+      robot_proprio: [256]
+      robot_privileged: [256]
+      goal_root: [256]
+      goal_object: [256]
     actor_obs_normalization: true
     critic_obs_normalization: true
     teacher_obs_normalization: true
@@ -114,7 +129,7 @@ agent:
     bc_coef: 0.3
     bc_coef_min: 0.05
     bc_coef_anneal_iters: 6000
-    learning_rate: 1.0e-3
+    learning_rate: 1.0e-4
     schedule: adaptive
     desired_kl: 0.01
     entropy_coef: 5.0e-4

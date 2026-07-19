@@ -1,5 +1,6 @@
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
@@ -38,7 +39,7 @@ class GoalCommandsCfg:
             "x": (-0.05, 0.05),
             "y": (-0.05, 0.05),
         },
-        gap=(50, 200),
+        gap=(50, None),
     )
 
 
@@ -61,6 +62,16 @@ class GoalObservationsCfg:
 
         goal_root_pos = ObsTerm(func=mdp.goal_root_pos_b, params={"command_name": "motion"})
         goal_root_rot = ObsTerm(func=mdp.goal_root_rot_b, params={"command_name": "motion"})
+        goal_root_waypoint = ObsTerm(func=mdp.goal_root_waypoint_b, params={"command_name": "motion"})
+        goal_end_effector_pose = ObsTerm(
+            func=mdp.goal_end_effector_pose_b,
+            params={
+                "command_name": "motion",
+                "asset_cfg": SceneEntityCfg("robot", body_names=["left_wrist_yaw_link", "right_wrist_yaw_link"]),
+            },
+        )
+        goal_keypoint_pos = ObsTerm(func=mdp.goal_keypoint_pos_b, params={"command_name": "motion"})
+        goal_body_pos_traj = ObsTerm(func=mdp.goal_body_pos_traj_b, params={"command_name": "motion"})
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -73,6 +84,21 @@ class GoalObservationsCfg:
 
         goal_object_pos = ObsTerm(func=mdp.goal_object_pos_b, params={"command_name": "motion"})
         goal_object_rot = ObsTerm(func=mdp.goal_object_rot_b, params={"command_name": "motion"})
+        goal_object_waypoint = ObsTerm(func=mdp.goal_object_waypoint_b, params={"command_name": "motion"})
+        goal_contact = ObsTerm(
+            func=mdp.goal_contact_b,
+            params={
+                "command_name": "motion",
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    body_names=[
+                        ".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate",
+                        ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate",
+                    ],
+                ),
+            },
+        )
+        goal_obj_ori_traj = ObsTerm(func=mdp.goal_obj_ori_traj_b, params={"command_name": "motion"})
 
         def __post_init__(self):
             self.enable_corruption = True

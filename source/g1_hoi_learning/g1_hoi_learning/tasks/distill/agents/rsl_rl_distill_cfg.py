@@ -17,13 +17,13 @@ class ActorCriticTeacherCfg(RslRlPpoActorCriticCfg):
     critic_hidden_dims: list[int] = []
     activation: str = "relu"
 
-    actor_hidden_dim: int = 2048
-    critic_hidden_dim: int = 2048
-    actor_num_blocks: int = 2
+    actor_hidden_dim: int = 1024
+    critic_hidden_dim: int = 1024
+    actor_num_blocks: int = 1
     critic_num_blocks: int = 2
-    expansion: int = 1
-    teacher_hidden_dim: int = 2048
-    teacher_num_blocks: int = 2
+    expansion: int = 4
+    teacher_hidden_dim: int = 1024
+    teacher_num_blocks: int = 1
 
     actor_obs_normalization: bool = True
     critic_obs_normalization: bool = True
@@ -31,13 +31,13 @@ class ActorCriticTeacherCfg(RslRlPpoActorCriticCfg):
     init_noise_std: float = 0.5
     noise_std_type: str = "scalar"
 
-    latent_dim: int = 256
+    latent_dim: int = 128
     encoder_hidden_dims: dict[str, list[int]] = {
-        "ref_motion_body": [1024, 512],
-        "ref_motion_object": [512],
-        "object_state": [512],
-        "robot_proprio": [512],
-        "robot_privileged": [512],
+        "ref_motion_body": [512, 256],
+        "ref_motion_object": [256],
+        "object_state": [256],
+        "robot_proprio": [256],
+        "robot_privileged": [256],
         "goal_root": [256],
         "goal_object": [256],
     }
@@ -57,7 +57,7 @@ class MuonPPODistillCfg(RslRlPpoAlgorithmCfg):
     entropy_coef: float = 5.0e-4
     num_learning_epochs: int = 5
     num_mini_batches: int = 4
-    learning_rate: float = 1.0e-3
+    learning_rate: float = 1.0e-4
     schedule: str = "adaptive"
     gamma: float = 0.99
     lam: float = 0.95
