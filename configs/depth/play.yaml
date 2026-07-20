@@ -1,0 +1,34 @@
+# @package _global_
+#
+# Usage:
+#   python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-Depth-v0 \
+#       --config-dir ./configs/depth --config-name play --load_run <RUN_DIR> --checkpoint <model_XXXX.pt>
+
+defaults:
+  - train
+  - _self_
+
+env:
+  scene:
+    num_envs: 1
+
+  commands:
+    motion:
+      motion_files:
+        - ./data/test/smalltable_42clip.npz
+      rsi: false
+      joint_position_range: [0.0, 0.0]
+      pose_range:
+        x: [0.0, 0.0]
+        y: [0.0, 0.0]
+        z: [0.0, 0.0]
+        roll: [0.0, 0.0]
+        pitch: [0.0, 0.0]
+        yaw: [0.0, 0.0]
+      velocity_range:
+        x: [0.0, 0.0]
+        y: [0.0, 0.0]
+        z: [0.0, 0.0]
+        roll: [0.0, 0.0]
+        pitch: [0.0, 0.0]
+        yaw: [0.0, 0.0]
