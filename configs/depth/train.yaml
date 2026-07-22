@@ -111,7 +111,7 @@ agent:
       object_state: [256]
       robot_proprio: [256]
       robot_privileged: [256]
-      depth: [1024, 512]
+      depth: [512, 256]
     actor_obs_normalization: true
     critic_obs_normalization: true
     teacher_obs_normalization: true

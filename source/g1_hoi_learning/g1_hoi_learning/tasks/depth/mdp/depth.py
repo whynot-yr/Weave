@@ -1,62 +1,86 @@
-"""Raycast depth observation for the depth-perception student (D435i head camera, simple_raycaster)."""
+"""Depth observation: head-camera depth degraded to D435i statistics (for the depth student)."""
 
 from __future__ import annotations
 
-import math
-
 import torch
-import warp as wp
+import torch.nn.functional as F
 
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import ManagerTermBase, ObservationTermCfg
-from isaaclab.utils.math import quat_apply, quat_from_euler_xyz, quat_mul
 
-from simple_raycaster.raycaster_v2 import MultiMeshRaycasterV2
+
+def _blur(d, ksize=5, sigma=1.0):
+    """Depthwise Gaussian blur (stereo smoothing; also yields edge flying-pixels). d: (N,H,W)."""
+    ax = torch.arange(ksize, device=d.device, dtype=d.dtype) - (ksize - 1) / 2
+    g = torch.exp(-(ax**2) / (2 * sigma**2))
+    ker = torch.outer(g, g)
+    ker = (ker / ker.sum()).view(1, 1, ksize, ksize)
+    x = F.pad(d.unsqueeze(1), (ksize // 2,) * 4, mode="reflect")
+    return F.conv2d(x, ker)[:, 0]
+
+
+def _edge_holes(d, valid, edge_thresh=0.05, drop_p=0.5):
+    """Holes at valid<->valid depth discontinuities ONLY (clip/hole borders excluded). d: (N,H,W)."""
+    edge = torch.zeros_like(d, dtype=torch.bool)
+    bx = ((d[:, :, 1:] - d[:, :, :-1]).abs() > edge_thresh) & valid[:, :, 1:] & valid[:, :, :-1]
+    edge[:, :, 1:] |= bx
+    edge[:, :, :-1] |= bx
+    by = ((d[:, 1:, :] - d[:, :-1, :]).abs() > edge_thresh) & valid[:, 1:, :] & valid[:, :-1, :]
+    edge[:, 1:, :] |= by
+    edge[:, :-1, :] |= by
+    edge &= torch.rand_like(d) < drop_p
+    return F.max_pool2d(edge.float()[:, None], 3, 1, 1)[:, 0] > 0  # dilate -> blobby
+
+
+def _blob_holes(d, max_dist, scale=12, base_p=0.01, range_p=0.06):
+    """Spatially-correlated (blob) holes, more frequent far away. d: (N,H,W)."""
+    N, H, W = d.shape
+    low = torch.rand(N, 1, max(1, H // scale), max(1, W // scale), device=d.device)
+    field = F.interpolate(low, (H, W), mode="bilinear", align_corners=False)[:, 0]
+    return field < (base_p + range_p * (d / max_dist).clamp(0, 1))
+
+
+def _degrade_depth(d, max_dist, noise_k=(0.005, 0.015), dropout=0.0,
+                   min_z=0.25, blur_sigma=1.0, edge=(0.05, 0.5), blob=(12, 0.01, 0.06)):
+    """Crisp raycast depth (m) -> D435i-like depth: Gaussian blur + axial noise + structured holes.
+
+    Holes (sub-MinZ, >max clip / no-hit, real depth edges, blobs, salt-pepper) -> 0. Returns (N,H,W) m.
+    """
+    valid = (d > min_z) & (d < max_dist - 1e-3)
+    hole = ~valid
+    hole |= _edge_holes(d, valid, *edge)
+    hole |= _blob_holes(d, max_dist, *blob)
+    if dropout > 0.0:
+        hole |= torch.rand_like(d) < dropout
+    out = _blur(d, sigma=blur_sigma)
+    kk = torch.empty(d.shape[0], 1, 1, device=d.device).uniform_(*noise_k)
+    out = out + torch.randn_like(out) * (kk * out**2)   # axial noise, sigma ~ k*z^2
+    return out.masked_fill(hole, 0.0).clamp(0.0, max_dist)
 
 
 class object_depth_b(ManagerTermBase):
-    """Normalized head-D435i raycast depth image (num_envs, W*H).
+    """Head-camera depth degraded to D435i statistics, in METRIC meters (num_envs, H*W).
     """
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        dev = env.device
-        cam_pos = cfg.params["cam_pos"]
-        cam_rpy = cfg.params["cam_rpy"]
-        fov_h, fov_v = cfg.params["fov_deg"]
-        width, height = cfg.params["resolution"]
-        wp.init()
-        self.rc = MultiMeshRaycasterV2(dev)
-        self.rc.add_isaac_entity(env.scene["robot"])
-        self.rc.add_isaac_entity(env.scene["object"])
-        self.rc.add_isaac_static("/World/ground")
-        # pinhole ray grid in camera frame: forward +x, image-right +y, image-up +z
-        fh, fv = math.radians(fov_h), math.radians(fov_v)
-        u = torch.linspace(math.tan(fh / 2), -math.tan(fh / 2), width, device=dev)
-        v = torch.linspace(math.tan(fv / 2), -math.tan(fv / 2), height, device=dev)
-        vv, uu = torch.meshgrid(v, u, indexing="ij")
-        dirs = torch.stack([torch.ones_like(uu), uu, vv], dim=-1).reshape(-1, 3)
-        self.dirs = (dirs / dirs.norm(dim=-1, keepdim=True)).contiguous()
-        self.cam_pos = torch.tensor(cam_pos, device=dev)
-        self.cam_quat = quat_from_euler_xyz(*(torch.tensor(a, device=dev) for a in cam_rpy)).reshape(4)
-        self.torso = env.scene["robot"].find_bodies("torso_link")[0][0]
+        sensor = env.scene.sensors[cfg.params.get("sensor_name", "depth_cam")]
+        sensor.set_robot(env.scene[cfg.params.get("robot_name", "robot")])
 
     def __call__(
         self,
         env: ManagerBasedEnv,
-        cam_pos: tuple[float, float, float],
-        cam_rpy: tuple[float, float, float],
-        fov_deg: tuple[float, float],
-        resolution: tuple[int, int],
-        max_dist: float = 5.0,
+        sensor_name: str = "depth_cam",
+        robot_name: str = "robot",
+        max_dist: float = 3.0,
+        min_z: float = 0.25,
+        noise_k_range: tuple[float, float] = (0.005, 0.015),
+        dropout_prob: float = 0.0,
+        blur_sigma: float = 1.0,
+        edge: tuple[float, float] = (0.05, 0.5),
+        blob: tuple[float, float, float] = (12, 0.01, 0.06),
     ) -> torch.Tensor:
-        robot = env.scene["robot"]
-        n, r = env.num_envs, self.dirs.shape[0]
-        torso_pos = robot.data.body_pos_w[:, self.torso]
-        torso_quat = robot.data.body_quat_w[:, self.torso]
-        cam_p = torso_pos + quat_apply(torso_quat, self.cam_pos.expand(n, 3))
-        cam_q = quat_mul(torso_quat, self.cam_quat.expand(n, 4))
-        ray_dirs = quat_apply(cam_q[:, None, :].expand(n, r, 4), self.dirs[None].expand(n, r, 3))
-        ray_starts = cam_p[:, None, :].expand(n, r, 3).contiguous()
-        _, dist = self.rc.raycast_fused(ray_starts, ray_dirs.contiguous(), min_dist=0.02, max_dist=max_dist)
-        return (dist / max_dist).clamp(0.0, 1.0)
+        depth = env.scene.sensors[sensor_name].data.output["distance_to_image_plane"]  # (N,H,W,1) m
+        depth = depth.squeeze(-1).detach().clone()  # (N,H,W)
+        depth = _degrade_depth(depth, max_dist, noise_k_range, dropout_prob, min_z, blur_sigma, edge, blob)
+        return depth.flatten(1)  # (N, H*W)
