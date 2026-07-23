@@ -20,7 +20,8 @@ class DepthSceneCfg(G1HoiLearningSceneCfg):
 
     depth_cam = ArticulationRayCasterCameraCfg(
         prim_path="{ENV_REGEX_NS}/Robot/torso_link",
-        update_period=0.02,
+        update_period=1.0 / 30.0,
+        debug_vis=False,
         offset=ArticulationRayCasterCameraCfg.OffsetCfg(
             pos=(0.0576235, 0.01753, 0.42987),
             rot=(0.91496, 0.0, 0.40355, 0.0),
@@ -60,6 +61,7 @@ class DepthObservationsCfg(ObservationsCfg):
                 "noise_k_range": (0.005, 0.015),
                 "dropout_prob": 0.05,
                 "defm_size": 512,
+                "debug_vis": False,
             },
         )
 

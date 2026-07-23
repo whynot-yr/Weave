@@ -74,6 +74,7 @@ class object_depth_b(ManagerTermBase):
             q.requires_grad_(False)
         self._preprocess = preprocess_depth_batch
         self._tgt = (int(p.get("defm_size", 224)) // 32) * 32
+        self._dbg_state = None  # omni.ui live depth window
 
     def __call__(
         self,
@@ -89,12 +90,30 @@ class object_depth_b(ManagerTermBase):
         robot_name: str = "robot",
         defm_model: str = "defm_resnet18",
         defm_size: int = 512,
+        debug_vis: bool = False,
     ) -> torch.Tensor:
         depth = env.scene.sensors[sensor_name].data.output["distance_to_image_plane"]  # (N,H,W,1) m
         depth = depth.squeeze(-1).detach().clone()  # (N,H,W)
         depth = _degrade_depth(depth, max_dist, noise_k_range, dropout_prob, min_z, blur_sigma, edge, blob)
+        if debug_vis:
+            self._debug_show(depth[0], max_dist)
         x = self._preprocess(depth.unsqueeze(1), target_size=(self._tgt, self._tgt), device=depth.device)
         dev = "cuda" if depth.is_cuda else "cpu"
         with torch.no_grad(), torch.autocast(device_type=dev, dtype=torch.float16):
             p4 = self._defm(x)["dense_bifpn"]["P4"]  # (N, 128, Hf, Wf)
         return p4.float().flatten(1)  # (N, 128*Hf*Wf)
+
+    def _debug_show(self, d: torch.Tensor, max_dist: float) -> None:
+        import matplotlib
+        import omni.ui as ui
+
+        img = (d.detach().float() / max_dist).clamp(0.0, 1.0).cpu().numpy()
+        rgba = (matplotlib.colormaps["turbo"](img) * 255).astype("uint8")
+        h, w = img.shape
+        if self._dbg_state is None:
+            provider = ui.ByteImageProvider()
+            window = ui.Window("noised depth (env 0)", width=w * 3, height=h * 3 + 24)
+            with window.frame:
+                ui.ImageWithProvider(provider)
+            self._dbg_state = (provider, window)
+        self._dbg_state[0].set_bytes_data(rgba.flatten().tolist(), [w, h])
