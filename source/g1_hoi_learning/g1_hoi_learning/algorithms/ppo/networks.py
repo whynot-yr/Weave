@@ -10,59 +10,7 @@ from torch.distributions import Normal
 from rsl_rl.modules import ActorCritic
 from rsl_rl.networks import EmpiricalNormalization
 
-from g1_hoi_learning.algorithms.networks import SimBa
-
-
-class GroupEncoder(nn.Module):
-    """Per-observation-group encoder bank.
-    ``Linear -> SiLU -> ... -> Linear(latent_dim)``.
-    """
-
-    def __init__(self, group_dims: list[int], hidden_dims: list[list[int]], latent_dim: int) -> None:
-        super().__init__()
-        if len(group_dims) != len(hidden_dims):
-            raise ValueError(f"group_dims ({len(group_dims)}) and hidden_dims ({len(hidden_dims)}) must align.")
-        self.group_dims: list[int] = list(group_dims)
-        self.in_features = sum(group_dims)
-        self.out_features = latent_dim * len(group_dims)
-        self.encoders = nn.ModuleList()
-        for group_dim, hidden in zip(group_dims, hidden_dims):
-            layers: list[nn.Module] = []
-            for in_dim, out_dim in zip([group_dim] + list(hidden), hidden):
-                layers += [nn.Linear(in_dim, out_dim), nn.SiLU()]
-            layers.append(nn.Linear(hidden[-1] if hidden else group_dim, latent_dim))
-            self.encoders.append(nn.Sequential(*layers))
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
-                nn.init.zeros_(m.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        chunks = torch.split(x, self.group_dims, dim=-1)
-        latents: list[torch.Tensor] = []
-        i = 0
-        for encoder in self.encoders:
-            latents.append(encoder(chunks[i]))
-            i += 1
-        return torch.cat(latents, dim=-1)
-
-
-def build_group_backbone(
-    obs: TensorDict,
-    groups: list[str],
-    encoder_hidden_dims: dict[str, list[int]],
-    latent_dim: int,
-    output_dim: int,
-    hidden_dim: int,
-    num_blocks: int,
-    expansion: int,
-) -> nn.Sequential:
-    """Per-group encoder bank -> SimBa backbone: ``nn.Sequential(GroupEncoder, SimBa)``."""
-    group_dims = [obs[g].shape[-1] for g in groups]
-    hidden_dims = [encoder_hidden_dims[g] for g in groups]
-    encoder = GroupEncoder(group_dims, hidden_dims, latent_dim)
-    backbone = SimBa(encoder.out_features, output_dim, hidden_dim, num_blocks, expansion)
-    return nn.Sequential(encoder, backbone)
+from g1_hoi_learning.algorithms.networks import build_group_backbone
 
 
 class SimBaActorCritic(ActorCritic):

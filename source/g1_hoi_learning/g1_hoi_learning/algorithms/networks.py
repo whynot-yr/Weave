@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tensordict import TensorDict
 
 
 def l2normalize(x: torch.Tensor, dim: int = -1, eps: float = 1e-8) -> torch.Tensor:
@@ -14,9 +16,6 @@ def l2normalize(x: torch.Tensor, dim: int = -1, eps: float = 1e-8) -> torch.Tens
 
 class Scaler(nn.Module):
     """Per-dimension learnable scale (SimBaV2): ``scaler * (init/scale) * x``.
-
-    ``scaler`` is initialized to ``scale`` so the effective initial multiplier is ``init``;
-    the ``init/scale`` split decouples the parameter magnitude from the effective scale.
     """
 
     def __init__(self, dim: int, init: float = 1.0, scale: float = 1.0) -> None:
@@ -146,3 +145,85 @@ class SimBa(nn.Module):
         x = self.blocks(x)
         x = self.head_scaler(self.head_dense(x))
         return self.output_proj(x)
+
+
+class MLPEncoder(nn.Sequential):
+    """Flat obs group -> latent_dim: ``Linear -> SiLU -> ... -> Linear(latent_dim)``.
+    """
+
+    def __init__(self, in_dim: int, latent_dim: int, hidden_dims: list[int] = ()) -> None:
+        layers: list[nn.Module] = []
+        for a, b in zip([in_dim] + list(hidden_dims), hidden_dims):
+            layers += [nn.Linear(a, b), nn.SiLU()]
+        layers.append(nn.Linear(hidden_dims[-1] if hidden_dims else in_dim, latent_dim))
+        super().__init__(*layers)
+
+
+class ConvEncoder(nn.Module):
+    """Flat (C*H*W) feature map -> conv stack -> latent_dim."""
+
+    def __init__(self, in_dim: int, latent_dim: int, in_ch: int, hw: list[int],
+                 channels: list[int] = (64, 64)) -> None:
+        super().__init__()
+        self.in_ch, self.h, self.w = in_ch, hw[0], hw[1]
+        if in_ch * self.h * self.w != in_dim:
+            raise ValueError(f"ConvEncoder: in_ch*H*W ({in_ch * self.h * self.w}) != group_dim ({in_dim}).")
+        layers: list[nn.Module] = []
+        c = in_ch
+        for oc in channels:
+            layers += [nn.Conv2d(c, oc, 3, stride=2, padding=1), nn.SiLU()]
+            c = oc
+        self.conv = nn.Sequential(*layers)
+        with torch.no_grad():
+            flat = self.conv(torch.zeros(1, in_ch, self.h, self.w)).flatten(1).shape[1]
+        self.proj = nn.Sequential(nn.Linear(flat, latent_dim), nn.SiLU())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.view(-1, self.in_ch, self.h, self.w)
+        return self.proj(self.conv(x).flatten(1))
+
+
+ENCODERS = {"mlp": MLPEncoder, "conv": ConvEncoder}
+
+
+class GroupEncoder(nn.Module):
+    """Per-observation-group encoder bank -> concatenated latents.
+    """
+
+    def __init__(self, group_dims: list[int], specs: list[dict], latent_dim: int) -> None:
+        super().__init__()
+        if len(group_dims) != len(specs):
+            raise ValueError(f"group_dims ({len(group_dims)}) and specs ({len(specs)}) must align.")
+        self.group_dims: list[int] = list(group_dims)
+        self.in_features = sum(group_dims)
+        self.out_features = latent_dim * len(group_dims)
+        self.encoders = nn.ModuleList()
+        for group_dim, spec in zip(group_dims, specs):
+            spec = dict(spec)
+            self.encoders.append(ENCODERS[spec.pop("type")](group_dim, latent_dim, **spec))
+        for m in self.modules():
+            if isinstance(m, (nn.Linear, nn.Conv2d)):
+                nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        chunks = torch.split(x, self.group_dims, dim=-1)
+        return torch.cat([enc(chunk) for enc, chunk in zip(self.encoders, chunks)], dim=-1)
+
+
+def build_group_backbone(
+    obs: TensorDict,
+    groups: list[str],
+    encoder_hidden_dims: dict[str, Any],
+    latent_dim: int,
+    output_dim: int,
+    hidden_dim: int,
+    num_blocks: int,
+    expansion: int,
+) -> nn.Sequential:
+    """Per-group encoder bank -> SimBa backbone: ``nn.Sequential(GroupEncoder, SimBa)``."""
+    group_dims = [obs[g].shape[-1] for g in groups]
+    specs = [encoder_hidden_dims[g] for g in groups]
+    encoder = GroupEncoder(group_dims, specs, latent_dim)
+    backbone = SimBa(encoder.out_features, output_dim, hidden_dim, num_blocks, expansion)
+    return nn.Sequential(encoder, backbone)

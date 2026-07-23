@@ -1,6 +1,8 @@
 """RSL-RL cfg for the distillation+RL stage — SimBa actor-critic + frozen teacher + MuonPPODistill.
 """
 
+from typing import Any
+
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
@@ -32,14 +34,14 @@ class ActorCriticTeacherCfg(RslRlPpoActorCriticCfg):
     noise_std_type: str = "scalar"
 
     latent_dim: int = 128
-    encoder_hidden_dims: dict[str, list[int]] = {
-        "ref_motion_body": [512, 256],
-        "ref_motion_object": [256],
-        "object_state": [256],
-        "robot_proprio": [256],
-        "robot_privileged": [256],
-        "goal_root": [256],
-        "goal_object": [256],
+    encoder_hidden_dims: dict[str, Any] = {
+        "ref_motion_body": {"type": "mlp", "hidden_dims": [512, 256]},
+        "ref_motion_object": {"type": "mlp", "hidden_dims": [256]},
+        "object_state": {"type": "mlp", "hidden_dims": [256]},
+        "robot_proprio": {"type": "mlp", "hidden_dims": [256]},
+        "robot_privileged": {"type": "mlp", "hidden_dims": [256]},
+        "goal_root": {"type": "mlp", "hidden_dims": [256]},
+        "goal_object": {"type": "mlp", "hidden_dims": [256]},
     }
 
 

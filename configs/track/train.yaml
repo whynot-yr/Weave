@@ -119,11 +119,11 @@ agent:
     expansion: 4
     latent_dim: 128
     encoder_hidden_dims:
-      ref_motion_body: [512, 256]
-      ref_motion_object: [256]
-      object_state: [256]
-      robot_proprio: [256]
-      robot_privileged: [256]
+      ref_motion_body: { type: mlp, hidden_dims: [512, 256] }
+      ref_motion_object: { type: mlp, hidden_dims: [256] }
+      object_state: { type: mlp, hidden_dims: [256] }
+      robot_proprio: { type: mlp, hidden_dims: [256] }
+      robot_privileged: { type: mlp, hidden_dims: [256] }
     actor_obs_normalization: true
     critic_obs_normalization: true
 

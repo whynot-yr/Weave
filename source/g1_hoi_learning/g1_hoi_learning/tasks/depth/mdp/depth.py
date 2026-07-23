@@ -1,4 +1,4 @@
-"""Depth observation: head-camera depth degraded to D435i statistics (for the depth student)."""
+"""Depth observation: head-camera depth degraded to D435i statistics -> frozen DeFM P4 features."""
 
 from __future__ import annotations
 
@@ -59,19 +59,26 @@ def _degrade_depth(d, max_dist, noise_k=(0.005, 0.015), dropout=0.0,
 
 
 class object_depth_b(ManagerTermBase):
-    """Head-camera depth degraded to D435i statistics, in METRIC meters (num_envs, H*W).
+    """Head-camera depth -> D435i degradation -> frozen DeFM (fp16) -> P4 features (num_envs, 128*Hf*Wf).
     """
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        sensor = env.scene.sensors[cfg.params.get("sensor_name", "depth_cam")]
-        sensor.set_robot(env.scene[cfg.params.get("robot_name", "robot")])
+        p = cfg.params
+        env.scene.sensors[p.get("sensor_name", "depth_cam")].set_robot(env.scene[p.get("robot_name", "robot")])
+        from defm.model_factory import create_defm_model
+        from defm.utils import preprocess_depth_batch
+
+        self._defm = create_defm_model(p.get("defm_model", "defm_resnet18"), pretrained=True).eval().to(env.device)
+        for q in self._defm.parameters():
+            q.requires_grad_(False)
+        self._preprocess = preprocess_depth_batch
+        self._tgt = (int(p.get("defm_size", 224)) // 32) * 32
 
     def __call__(
         self,
         env: ManagerBasedEnv,
         sensor_name: str = "depth_cam",
-        robot_name: str = "robot",
         max_dist: float = 3.0,
         min_z: float = 0.25,
         noise_k_range: tuple[float, float] = (0.005, 0.015),
@@ -79,8 +86,15 @@ class object_depth_b(ManagerTermBase):
         blur_sigma: float = 1.0,
         edge: tuple[float, float] = (0.05, 0.5),
         blob: tuple[float, float, float] = (12, 0.01, 0.06),
+        robot_name: str = "robot",
+        defm_model: str = "defm_resnet18",
+        defm_size: int = 512,
     ) -> torch.Tensor:
         depth = env.scene.sensors[sensor_name].data.output["distance_to_image_plane"]  # (N,H,W,1) m
         depth = depth.squeeze(-1).detach().clone()  # (N,H,W)
         depth = _degrade_depth(depth, max_dist, noise_k_range, dropout_prob, min_z, blur_sigma, edge, blob)
-        return depth.flatten(1)  # (N, H*W)
+        x = self._preprocess(depth.unsqueeze(1), target_size=(self._tgt, self._tgt), device=depth.device)
+        dev = "cuda" if depth.is_cuda else "cpu"
+        with torch.no_grad(), torch.autocast(device_type=dev, dtype=torch.float16):
+            p4 = self._defm(x)["dense_bifpn"]["P4"]  # (N, 128, Hf, Wf)
+        return p4.float().flatten(1)  # (N, 128*Hf*Wf)

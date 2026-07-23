@@ -59,6 +59,7 @@ class DepthObservationsCfg(ObservationsCfg):
                 "min_z": 0.25,
                 "noise_k_range": (0.005, 0.015),
                 "dropout_prob": 0.05,
+                "defm_size": 512,
             },
         )
 

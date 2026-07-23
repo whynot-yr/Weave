@@ -216,15 +216,22 @@ def main():
                 print(f"[INFO] DeFM input resized to {(h_t, w_t)} -> P4 {(h_t // 16, w_t // 16)}")
         else:
             x = preprocess(noised.unsqueeze(1), cnn_padding=True, device=depth_m.device)  # (N,3,96,128)
+        # DeFM twice: FP32 (reference) + FP16 autocast (deploy/training precision); shared PCA basis
         with torch.no_grad():
-            out = defm(x)
-        p4 = out["dense_bifpn"]["P4"]  # (N,128,6,8)
-        gh, gw = p4.shape[2], p4.shape[3]
-        feat = p4.permute(0, 2, 3, 1).reshape(-1, p4.shape[1]).float().cpu().numpy()  # (N*gh*gw, 128)
-        pca_rgb = minmax_scale(PCA(n_components=3).fit_transform(feat)).reshape(n, gh, gw, 3)
-        pca_up = torch.nn.functional.interpolate(  # nearest -> keep the honest 6x8 feature grid
-            torch.from_numpy(pca_rgb.astype(np.float32)).permute(0, 3, 1, 2), size=hw, mode="nearest"
-        ).permute(0, 2, 3, 1).numpy()  # (N,H,W,3)
+            p4_32 = defm(x)["dense_bifpn"]["P4"]  # (N,128,gh,gw)
+            with torch.autocast(device_type=("cuda" if x.is_cuda else "cpu"), dtype=torch.float16):
+                p4_16 = defm(x)["dense_bifpn"]["P4"]
+        gh, gw = p4_32.shape[2], p4_32.shape[3]
+        feat32 = p4_32.permute(0, 2, 3, 1).reshape(-1, p4_32.shape[1]).float().cpu().numpy()
+        feat16 = p4_16.permute(0, 2, 3, 1).reshape(-1, p4_16.shape[1]).float().cpu().numpy()
+        pca = PCA(n_components=3).fit(feat32)  # basis from FP32 -> fp32/fp16 colors directly comparable
+        both = minmax_scale(np.concatenate([pca.transform(feat32), pca.transform(feat16)], axis=0))
+
+        def _up(rgb):  # (N*gh*gw, 3) -> (N,H,W,3), nearest (keep the honest feature grid)
+            t = torch.from_numpy(rgb.reshape(n, gh, gw, 3).astype(np.float32)).permute(0, 3, 1, 2)
+            return torch.nn.functional.interpolate(t, size=hw, mode="nearest").permute(0, 2, 3, 1).numpy()
+
+        pca_up_32, pca_up_16 = _up(both[: len(feat32)]), _up(both[len(feat32):])
 
         noised_disp = (noised / max_dist).clamp(0, 1).cpu().numpy()  # for display; holes(0)->dark
 
@@ -245,17 +252,18 @@ def main():
         with open(os.path.join(args_cli.out, f"depth_stats_frame{f}.txt"), "w") as fp:
             fp.write(table + "\n")
 
-        _save_defm(noised_disp, pca_up, labels, obj_dist, f, args_cli.out)
+        _save_defm(noised_disp, pca_up_32, pca_up_16, labels, obj_dist, f, args_cli.out)
 
     print(f"\n[INFO] images written to: {os.path.abspath(args_cli.out)}")
     env.close()
 
 
-def _save_defm(noised_disp, pca_up, labels, obj_dist, frame, out_dir):
-    """Square grid; each cell = noised depth (top, turbo) over DeFM-P4 PCA-RGB (bottom)."""
+def _save_defm(noised_disp, pca_up_32, pca_up_16, labels, obj_dist, frame, out_dir):
+    """Square grid; each cell = noised depth (top) / DeFM-P4 PCA fp32 (mid) / fp16 (bottom)."""
     n = noised_disp.shape[0]
     if not HAS_MPL:
-        np.savez(os.path.join(out_dir, f"defm_frame{frame}.npz"), noised=noised_disp, pca=pca_up)
+        np.savez(os.path.join(out_dir, f"defm_frame{frame}.npz"),
+                 noised=noised_disp, pca32=pca_up_32, pca16=pca_up_16)
         print("[WARN] matplotlib not available; saved arrays as .npz.")
         return
     turbo = plt.get_cmap("turbo")
@@ -263,16 +271,16 @@ def _save_defm(noised_disp, pca_up, labels, obj_dist, frame, out_dir):
     sep = np.ones((2, w, 3))
     cols = int(np.ceil(np.sqrt(n)))
     rows = int(np.ceil(n / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(2.7 * cols, 3.1 * rows), squeeze=False)
+    fig, axes = plt.subplots(rows, cols, figsize=(2.7 * cols, 4.2 * rows), squeeze=False)
     for idx in range(rows * cols):
         ax = axes[idx // cols][idx % cols]
         ax.axis("off")
         if idx >= n:
             continue
         top = turbo(noised_disp[idx])[..., :3]  # (H,W,3) depth colormapped
-        cell = np.concatenate([top, sep, pca_up[idx]], axis=0)  # noised over DeFM features (both RGB)
+        cell = np.concatenate([top, sep, pca_up_32[idx], sep, pca_up_16[idx]], axis=0)  # noised / fp32 / fp16
         ax.imshow(cell)
-        ax.set_title(f"env{idx} {labels[idx]} d={obj_dist[idx]:.2f}\nnoised(top) / DeFM-P4 PCA(bot)", fontsize=7)
+        ax.set_title(f"env{idx} {labels[idx]} d={obj_dist[idx]:.2f}\nnoised / P4 fp32 / P4 fp16", fontsize=7)
     fig.tight_layout()
     path = os.path.join(out_dir, f"defm_features_frame{frame}.png")
     fig.savefig(path, dpi=130)
