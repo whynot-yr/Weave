@@ -1,0 +1,38 @@
+# @package _global_
+#
+# Clip-wise evaluation config with eval_mode on.
+#
+# Usage:
+#   python scripts/rsl_rl/eval.py --task=G1-Inspire-HOI-v0 --headless \
+#       --config-dir ./configs/track --config-name eval
+
+defaults:
+  - train
+  - _self_
+
+env:
+  commands:
+    motion:
+      motion_files:
+        - ./data/test_prepend/smalltable_42clip_var5.npz
+      eval_mode: true
+      rsi: false
+      debug_vis: false
+      # joint_position_range: [0.0, 0.0]
+      # pose_range:
+      #   x: [0.0, 0.0]
+      #   y: [0.0, 0.0]
+      #   z: [0.0, 0.0]
+      #   roll: [0.0, 0.0]
+      #   pitch: [0.0, 0.0]
+      #   yaw: [0.0, 0.0]
+      # velocity_range:
+      #   x: [0.0, 0.0]
+      #   y: [0.0, 0.0]
+      #   z: [0.0, 0.0]
+      #   roll: [0.0, 0.0]
+      #   pitch: [0.0, 0.0]
+      #   yaw: [0.0, 0.0]
+      # object_range:
+      #   x: [0.0, 0.0]
+      #   y: [0.0, 0.0]

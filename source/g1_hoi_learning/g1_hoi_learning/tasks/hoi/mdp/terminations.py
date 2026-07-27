@@ -72,6 +72,13 @@ def bad_object_ori(
     return (ref_projected_gravity_b[:, 2] - obj_projected_gravity_b[:, 2]).abs() > threshold
 
 
+def motion_clip_end(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Reference clip exhausted. Register with ``time_out=True`` -- reaching the last frame is a success.
+    Not part of TerminationsCfg: the eval script adds it, training rolls over inside the command instead."""
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    return command.time_steps >= command.motion.clip_lengths[command.env_clip] - 1
+
+
 def bad_motion_body_pos_z_only(
     env: ManagerBasedRLEnv, command_name: str, threshold: float, body_names: list[str] | None = None
 ) -> torch.Tensor:

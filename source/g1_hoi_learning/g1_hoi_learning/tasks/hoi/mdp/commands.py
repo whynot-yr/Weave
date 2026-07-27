@@ -202,6 +202,19 @@ class MotionCommand(CommandTerm):
         self._eval_clip_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.future_offsets = torch.tensor(cfg.future_offsets, dtype=torch.long, device=self.device)
 
+        # clip-wise evaluation
+        if self.cfg.eval_mode:
+            if self.motion.num_objects != 1:
+                raise ValueError(
+                    f"eval_mode requires a single-object motion set, got {self.motion.num_objects} objects "
+                )
+            if self.num_envs != self.motion.num_clips:
+                print(
+                    f"[WARN] eval_mode: num_envs={self.num_envs} != num_clips={self.motion.num_clips};"
+                )
+            self._eval_env_clip = torch.arange(self.num_envs, device=self.device) % self.motion.num_clips
+            self.env_clip = self._eval_env_clip.clone()
+
         # caches refreshed in _update_command
         self._current_frame: MotionData | None = None
         self._future_frame: MotionData | None = None
@@ -212,6 +225,8 @@ class MotionCommand(CommandTerm):
         self.metrics["error_body_rot"]   = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_joint_pos"]  = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_joint_vel"]  = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_object_pos"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_object_rot"] = torch.zeros(self.num_envs, device=self.device)
 
         # initial frame so properties are valid before the first _update_command
         self._refresh_caches()
@@ -400,6 +415,11 @@ class MotionCommand(CommandTerm):
 
     # ------------------------------------------------------------------- CommandTerm interface
 
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        extras = super().reset(env_ids)
+        self._refresh_caches()
+        return extras
+
     def _update_metrics(self):
         self.metrics["error_anchor_pos"] = torch.norm(self.anchor_pos_w - self.robot_anchor_pos_w, dim=-1)
         self.metrics["error_anchor_rot"] = quat_error_magnitude(self.anchor_quat_w, self.robot_anchor_quat_w)
@@ -411,6 +431,8 @@ class MotionCommand(CommandTerm):
         ).mean(dim=-1)
         self.metrics["error_joint_pos"] = torch.norm(self.joint_pos - self.robot_joint_pos, dim=-1)
         self.metrics["error_joint_vel"] = torch.norm(self.joint_vel - self.robot_joint_vel, dim=-1)
+        self.metrics["error_object_pos"] = torch.norm(self.ref_obj_pos_w - self.obj_pos_w, dim=-1)
+        self.metrics["error_object_rot"] = quat_error_magnitude(self.ref_obj_quat_w, self.obj_quat_w)
 
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
@@ -419,7 +441,10 @@ class MotionCommand(CommandTerm):
         objects = self.env_object[env_ids]
 
         # 1. pick which clip each reset env plays (within its fixed object), then RSI the time
-        if self.cfg.rsi:
+        if self.cfg.eval_mode:
+            self.env_clip[env_ids] = self._eval_env_clip[env_ids]
+            self.time_steps[env_ids] = 0
+        elif self.cfg.rsi:
             self.env_clip[env_ids] = self.motion.sample_clip(objects)
             T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float()   # (n,)
             self.time_steps[env_ids] = (torch.rand(n, device=self.device) * T_per_env).long().clamp(min=0)
@@ -492,8 +517,10 @@ class MotionCommand(CommandTerm):
     def _update_command(self):
         self.time_steps += 1
         clip_end = self.motion.clip_lengths[self.env_clip]    # (num_envs,)
-        env_ids_to_reset = torch.where(self.time_steps >= clip_end)[0]
-        self._resample_command(env_ids_to_reset)
+        if self.cfg.eval_mode:
+            torch.minimum(self.time_steps, clip_end - 1, out=self.time_steps)
+        else:
+            self._resample_command(torch.where(self.time_steps >= clip_end)[0])
         # refresh caches once for the rest of the step
         self._refresh_caches()
 
@@ -563,6 +590,9 @@ class MotionCommandCfg(CommandTermCfg):
 
     rsi: bool = True
     """Random State Initialization: start from random frame (training) or frame 0 (evaluation)."""
+
+    eval_mode: bool = False
+    """Clip-wise evaluation. Requires a single-object motion set."""
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""
