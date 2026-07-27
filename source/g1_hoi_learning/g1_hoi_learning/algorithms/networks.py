@@ -11,7 +11,7 @@ from tensordict import TensorDict
 
 def l2normalize(x: torch.Tensor, dim: int = -1, eps: float = 1e-8) -> torch.Tensor:
     """Project onto the unit hypersphere along ``dim``."""
-    return x / x.norm(dim=dim, keepdim=True).clamp_min(eps)
+    return x / torch.linalg.vector_norm(x, dim=dim, keepdim=True).clamp_min(eps)
 
 
 class Scaler(nn.Module):
@@ -49,7 +49,7 @@ class HyperEmbedder(nn.Module):
         self.scaler = Scaler(hidden_dim, scaler_init, scaler_scale)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        shift = x.new_full((*x.shape[:-1], 1), self.c_shift)
+        shift = torch.full_like(x[..., :1], self.c_shift)
         x = torch.cat([x, shift], dim=-1)
         x = l2normalize(x)
         x = self.scaler(self.dense(x))
@@ -208,7 +208,10 @@ class GroupEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         chunks = torch.split(x, self.group_dims, dim=-1)
-        return torch.cat([enc(chunk) for enc, chunk in zip(self.encoders, chunks)], dim=-1)
+        latents: list[torch.Tensor] = []
+        for i, encoder in enumerate(self.encoders):
+            latents.append(encoder(chunks[i]))
+        return torch.cat(latents, dim=-1)
 
 
 def build_group_backbone(

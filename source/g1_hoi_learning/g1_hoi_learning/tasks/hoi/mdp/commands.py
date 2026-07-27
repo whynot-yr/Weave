@@ -173,6 +173,9 @@ class MotionLoader:
         """The first clip of each given object (deterministic; used for eval)."""
         return self._clips_by_object[object_ids, 0]
 
+    def clip_at(self, object_ids: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        """The (pos mod nclips)-th clip of each object — used to walk through all clips in eval."""
+        return self._clips_by_object[object_ids, pos % self.object_nclips[object_ids]]
 
 # ----------------------------------------------------------------------- MotionCommand
 
@@ -196,6 +199,7 @@ class MotionCommand(CommandTerm):
         self.env_object     = torch.arange(self.num_envs, device=self.device) % self.motion.num_objects
         # env -> current clip within that object (re-sampled every episode); init to the object's first clip
         self.env_clip       = self.motion.first_clip(self.env_object)
+        self._eval_clip_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.future_offsets = torch.tensor(cfg.future_offsets, dtype=torch.long, device=self.device)
 
         # caches refreshed in _update_command
@@ -420,7 +424,10 @@ class MotionCommand(CommandTerm):
             T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float()   # (n,)
             self.time_steps[env_ids] = (torch.rand(n, device=self.device) * T_per_env).long().clamp(min=0)
         else:
-            self.env_clip[env_ids] = self.motion.first_clip(objects)
+            # self.env_clip[env_ids] = self.motion.first_clip(objects)
+            # self.time_steps[env_ids] = 0
+            self.env_clip[env_ids] = self.motion.clip_at(objects, self._eval_clip_idx[env_ids])
+            self._eval_clip_idx[env_ids] += 1
             self.time_steps[env_ids] = 0
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
