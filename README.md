@@ -1,27 +1,6 @@
-<div align="center">
+**A single RL policy learns to reproduce mocap-retargeted manipulation motion on a Unitree G1 with Inspire dexterous hands — matching body pose, object pose, and hand contacts.**
 
-<img src=".github/assets/hero.svg" width="100%" alt="G1 · HOI Learning" />
-
-<p>
-  <img src="https://img.shields.io/badge/Isaac%20Sim-5.1.0-76B900?logo=nvidia&logoColor=white" alt="Isaac Sim 5.1.0" />
-  <img src="https://img.shields.io/badge/Isaac%20Lab-2.3.2-5a4fcf" alt="Isaac Lab 2.3.2" />
-  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11" />
-  <img src="https://img.shields.io/badge/PyTorch-cu130-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch cu130" />
-  <img src="https://img.shields.io/badge/RL-RSL--RL-8A2BE2" alt="RSL-RL" />
-</p>
-
-<b>A single RL policy learns to reproduce mocap-retargeted manipulation motion on a Unitree G1 with Inspire dexterous hands — matching body pose, object pose, and hand contacts.</b>
-
-<sub>
-  <a href="#-highlights">Highlights</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="#-installation">Installation</a> ·
-  <a href="#-data-pipeline">Data Pipeline</a> ·
-  <a href="#-training">Training</a> ·
-  <a href="#-evaluation--play">Play</a>
-</sub>
-
-</div>
+[Highlights](#-highlights) · [Architecture](#-architecture) · [Installation](#-installation) · [Data Pipeline](#-data-pipeline) · [Training](#-training) · [Play](#-evaluation--play)
 
 ---
 
@@ -94,106 +73,58 @@ g1_hoi_learning/
 ## 🔧 Installation
 
 1. Install [uv](https://docs.astral.sh/uv/#installation) by
-
-    ```bash
+  ```bash
     curl -LsSf https://astral.sh/uv/install.sh | sh
     uv venv --python 3.11 sim51
-    ```
+    uv pip install pip
 
+  ```
 2. Install [Isaac Sim 5.1](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/download.html) and follow the steps in [Installation](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/install_workstation.html)
-
-    ```bash
+  ```bash
     mkdir $workspace/isaacsim
     # take x86_64 as an example
     unzip "isaac-sim-standalone-5.1.0-linux-x86_64.zip" -d $workspace/isaacsim
     cd $workspace/isaacsim
     ./post_install.sh
     export ISAACSIM=$workspace/isaacsim
-    ```
-
+  ```
 3. Clone the [IsaacLab](https://github.com/isaac-sim/IsaacLab) repository and checkout to commit `e1731280`
-
 4. Install IsaacSim and IsaacLab in the `sim51` venv
-
-    ```bash
+  ```bash
     # enter the cloned repository
     cd IsaacLab
+    git checkout e17312889676ed229b986d56c9e0b23a01cf0ab7
     # create a symbolic link
     ln -s ${ISAACSIM} _isaac_sim
 
     ./isaaclab.sh --uv sim51
 
     ./isaaclab.sh -i rsl_rl
-    ```
-
+  ```
 5. Install [torch>=2.10](https://pytorch.org/get-started/locally/)
-
-    ```bash
-    uv pip3 install torch torchvision
-    ```
-
+  ```bash
+    uv pip install 'torch>=2.10' torchvision
+  ```
 6. Sideline Isaac Sim's bundled torch/torchvision/nvidia (required for Muon optimizer + venv torch ABI):
-
-   ```bash
+  ```bash
    PREBUNDLE=$ISAACSIM/exts/omni.isaac.ml_archive/pip_prebundle
    mv $PREBUNDLE/torch       $PREBUNDLE/torch.bak
    mv $PREBUNDLE/torchvision $PREBUNDLE/torchvision.bak
    mv $PREBUNDLE/nvidia      $PREBUNDLE/nvidia.bak
-   ```
-
+  ```
 7. Clone this repo outside the `IsaacLab` directory.
-
 8. Install the extension in editable mode using your Isaac Lab Python interpreter:
-
-   ```bash
+  ```bash
    python -m pip install -e source/g1_hoi_learning
-   ```
-
+  ```
 9. Build the **PointNet++ CUDA ops** required by the object point-cloud encoder. This compiles a CUDA extension, so it needs an `nvcc` whose **major** version matches your venv PyTorch's CUDA build.
-
-   **If your system `nvcc` already matches** (e.g. both CUDA 12.x), it's a one-liner:
-
-   ```bash
-   python -m pip install ./third_party/pointnet2_ops_lib
-   ```
-
+  **If your system `nvcc` already matches** (e.g. both CUDA 12.x), it's a one-liner:
    **If they differ** (this repo's setup: PyTorch **cu130** but system `nvcc` is 12.x), install a matching CUDA-13 toolchain into the venv and build against it. The steps below are verified for **PyTorch cu130 + RTX 4090 (sm_89)**:
-
-   ```bash
-   # (a) CUDA-13 compiler toolchain — pin every piece to 13.0.x so nvcc / cicc (nvvm) /
-   #     cccl headers agree (a version skew gives "PTX .version" or CCCL header errors)
-   python -m pip install \
-       "nvidia-cuda-nvcc==13.0.88" "nvidia-nvvm==13.0.88" \
-       "nvidia-cuda-crt==13.0.88" "nvidia-cuda-cccl==13.0.85"
-
-   # (b) point CUDA_HOME at the pip toolchain (bin/nvcc, include/, lib/, nvvm/)
-   export CUDA_HOME="$(python -c 'import site; print(site.getsitepackages()[0])')/nvidia/cu13"
-   export PATH="$CUDA_HOME/bin:$PATH"
-
-   # (c) pip's CUDA wheels ship libcudart.so.13
-   ln -sf libcudart.so.13 "$CUDA_HOME/lib/libcudart.so"
-
-   # (d) compile for GPU arch (8.9 = RTX 4090; 8.6 = 3090, 9.0 = H100, ...)
-   TORCH_CUDA_ARCH_LIST="8.9" \
-       python -m pip install --no-build-isolation ./third_party/pointnet2_ops_lib
-   ```
-
    Verify the ops load and execute on the GPU:
-
-   ```bash
-   python -c "
-   import torch
-   from pointnet2_ops.pointnet2_modules import PointnetSAModule
-   m = PointnetSAModule(npoint=64, radius=0.2, nsample=16, mlp=[0,32,32,64]).cuda().eval()
-   print('pointnet2_ops OK:', tuple(m(torch.randn(2,512,3,device='cuda'), None)[1].shape))
-   "
-   ```
-
 10. Verify:
-
-   ```bash
+  ```bash
    python scripts/list_envs.py
-   ```
+  ```
 
 ---
 
@@ -302,6 +233,7 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 ```
 
 `play.py` automatically:
+
 - runs in non-headless mode (GUI),
 - exports `policy.pt` (TorchScript) and `policy.onnx` to `<run_dir>/exported/`.
 
