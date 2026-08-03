@@ -198,6 +198,13 @@ class MuonPPO(PPO):
         if mean_symmetry_loss is not None:
             mean_symmetry_loss /= num_updates
 
+        with torch.no_grad():
+            values_flat = self.storage.values.flatten()
+            returns_flat = self.storage.returns.flatten()
+            explained_variance = (
+                1.0 - (returns_flat - values_flat).var() / (returns_flat.var() + 1e-8)
+            ).item()
+
         self.storage.clear()
 
         loss_dict = {
@@ -206,6 +213,7 @@ class MuonPPO(PPO):
             "entropy": mean_entropy,
             "clip_fraction": mean_clip_fraction,
             "kl": mean_kl,
+            "explained_variance": explained_variance,
         }
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss

@@ -1,6 +1,6 @@
 **A single RL policy learns to reproduce mocap-retargeted manipulation motion on a Unitree G1 with Inspire dexterous hands — matching body pose, object pose, and hand contacts.**
 
-[Highlights](#-highlights) · [Architecture](#-architecture) · [Installation](#-installation) · [Data Pipeline](#-data-pipeline) · [Training](#-training) · [Play](#-evaluation--play)
+[Highlights](#-highlights) · [Architecture](#-architecture) · [Installation](#-installation) · [Data Pipeline](#-data-pipeline) · [Training](#-training) · [Evaluation](#-evaluation) · [Play](#-play)
 
 ---
 
@@ -72,85 +72,27 @@ g1_hoi_learning/
 
 ## 🔧 Installation
 
-1. Install [uv](https://docs.astral.sh/uv/#installation) by
+1. Create a workspace directory — everything (Isaac Sim, IsaacLab, the venv, this repo) is installed side by side inside it, so pick a disk with **~30 GB** free:
   ```bash
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    uv venv --python 3.11 sim51
-    uv pip install pip
+    export WORKSPACE=$HOME/g1_hoi_ws     # any path you like
+    mkdir -p "$WORKSPACE" && cd "$WORKSPACE"
+  ```
 
-  ```
-2. Install [Isaac Sim 5.1](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/download.html) and follow the steps in [Installation](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/install_workstation.html)
+2. Clone the repository
   ```bash
-    mkdir $workspace/isaacsim
-    # take x86_64 as an example
-    unzip "isaac-sim-standalone-5.1.0-linux-x86_64.zip" -d $workspace/isaacsim
-    cd $workspace/isaacsim
-    ./post_install.sh
-    export ISAACSIM=$workspace/isaacsim
+    git clone https://github.com/xingchen1203/g1_hoi_learning.git
+    cd g1_hoi_learning
   ```
-3. Clone the [IsaacLab](https://github.com/isaac-sim/IsaacLab) repository and checkout to commit `e1731280`
-4. Install IsaacSim and IsaacLab in the `sim51` venv
-  ```bash
-    # enter the cloned repository
-    cd IsaacLab
-    git checkout e17312889676ed229b986d56c9e0b23a01cf0ab7
-    # create a symbolic link
-    ln -s ${ISAACSIM} _isaac_sim
 
-    ./isaaclab.sh --uv sim51
+3. Installation
+  ```bash
+    bash ./install.sh
+  ```
 
-    ./isaaclab.sh -i rsl_rl
-  ```
-5. Install [torch>=2.10](https://pytorch.org/get-started/locally/)
-  ```bash
-    uv pip install 'torch>=2.10' torchvision
-  ```
-6. Sideline Isaac Sim's bundled torch/torchvision/nvidia (required for Muon optimizer + venv torch ABI):
-  ```bash
-   PREBUNDLE=$ISAACSIM/exts/omni.isaac.ml_archive/pip_prebundle
-   mv $PREBUNDLE/torch       $PREBUNDLE/torch.bak
-   mv $PREBUNDLE/torchvision $PREBUNDLE/torchvision.bak
-   mv $PREBUNDLE/nvidia      $PREBUNDLE/nvidia.bak
-  ```
-7. Clone this repo outside the `IsaacLab` directory.
-8. Install the extension in editable mode using your Isaac Lab Python interpreter:
-  ```bash
-   python -m pip install -e source/g1_hoi_learning
-  ```
-9. Build the **PointNet++ CUDA ops** required by the object point-cloud encoder. This compiles a CUDA extension, so it needs an `nvcc` whose **major** version matches your venv PyTorch's CUDA build.
-  **If your system `nvcc` already matches** (e.g. both CUDA 12.x), it's a one-liner:
-   **If they differ** (this repo's setup: PyTorch **cu130** but system `nvcc` is 12.x), install a matching CUDA-13 toolchain into the venv and build against it. The steps below are verified for **PyTorch cu130 + RTX 4090 (sm_89)**:
-   Verify the ops load and execute on the GPU:
-10. Verify:
+4. Verify:
   ```bash
    python scripts/list_envs.py
   ```
-
----
-
-## 🧩 Data Pipeline
-
-### Step 1 — sample surface points
-
-For each object, generate `surface.npy` (P=512 surface points in object-local frame, used by the `object_nearest_point_b` observation and by the frozen PointNet++ `object_point_cloud_b` encoder):
-
-```bash
-python scripts/sample_object_points.py --name clothesstand --num_points 512
-# repeat for floorlamp, largebox, ...
-```
-
-Output: `source/g1_hoi_learning/g1_hoi_learning/objects/<name>/surface.npy`.
-
-### Step 2 — pack clips of one object → one multi-clip npz
-
-`data_replay_multiple.py` kinematically replays every clip of an object through Isaac Sim, captures per-frame body/object world states, and concatenates them into a single packed npz for multi-clip RL training:
-
-```bash
-python scripts/data_replay_multiple.py \
-    --input_file  ./data/retargeted/smalltable_train.pkl \
-    --output_file ./data/train/smalltable_279clip.npz \
-    --input_fps 30 --output_fps 50 --headless
-```
 
 ---
 
@@ -197,6 +139,24 @@ python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 \
 
 Logs go to `logs/rsl_rl/g1_inspire_hoi/<timestamp>_<run_name>/`.
 
+
+### Multi-GPU training
+
+```bash
+# single node, 2 GPUs
+python -m torch.distributed.run --nnodes=1 --nproc_per_node=2 \
+    scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 --distributed \
+    --config-dir ./configs/track --config-name train
+```
+
+```bash
+# two nodes, 2 GPUs each -- run on the master (node_rank=0), then on each worker with node_rank=1, ...
+python -m torch.distributed.run --nnodes=2 --nproc_per_node=2 --node_rank=0 \
+    --master_addr=<master-ip> --master_port=5555 \
+    scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 --distributed \
+    --config-dir ./configs/track --config-name train
+```
+
 ### TensorBoard
 
 ```bash
@@ -206,10 +166,35 @@ tensorboard --logdir logs/rsl_rl --port 6006
 
 ---
 
-## 🎬 Evaluation & Play
+## 📊 Evaluation
 
-Eval uses `configs/track/play.yaml`, which inherits from `train.yaml` and overrides
-`num_envs=1` and turns off RSI / reset perturbations for deterministic playback.
+`eval.py` scores a checkpoint clip by clip: it maps **one env per clip**, 
+and writes aggregate metrics to `<run_dir>/eval/metrics.json`. 
+It uses `configs/track/eval.yaml`, which inherits `train.yaml` and turns on `eval_mode`.
+
+```bash
+# evaluate the most recent checkpoint over every clip in eval.yaml
+python scripts/rsl_rl/eval.py --task=G1-Inspire-HOI-v0 --headless \
+    --config-dir ./configs/track --config-name eval
+
+# a specific run / checkpoint, on a different clip set
+python scripts/rsl_rl/eval.py --task=G1-Inspire-HOI-v0 --headless \
+    --config-dir ./configs/track --config-name eval \
+    --load_run 2026-05-09_14-23-11 --checkpoint model_2000.pt \
+    env.commands.motion.motion_files=[./data/test/floorlamp_34clip.npz]
+
+# write the report somewhere else
+python scripts/rsl_rl/eval.py --task=G1-Inspire-HOI-v0 --headless \
+    --config-dir ./configs/track --config-name eval \
+    --output_dir ./outputs/eval-baseline
+```
+
+---
+
+## 🎬 Play
+
+`play.yaml` inherits from `train.yaml` and overrides `num_envs=1`, turning off RSI / reset
+perturbations for deterministic playback.
 
 ```bash
 # play the most recent checkpoint

@@ -261,6 +261,20 @@ class EventCfg:
             "dynamic_friction_range": (0.3, 1.2),
             "restitution_range": (0.0, 0.5),
             "num_buckets": 64,
+            "make_consistent": True,
+        },
+    )
+
+    object_physics_material = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("object"),
+            "static_friction_range": (0.4, 1.2),
+            "dynamic_friction_range": (0.3, 1.2),
+            "restitution_range": (0.0, 0.2),
+            "num_buckets": 64,
+            "make_consistent": True,
         },
     )
 

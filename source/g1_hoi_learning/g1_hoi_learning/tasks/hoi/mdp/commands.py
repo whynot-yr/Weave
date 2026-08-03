@@ -443,17 +443,15 @@ class MotionCommand(CommandTerm):
         # 1. pick which clip each reset env plays (within its fixed object), then RSI the time
         if self.cfg.eval_mode:
             self.env_clip[env_ids] = self._eval_env_clip[env_ids]
-            self.time_steps[env_ids] = 0
         elif self.cfg.rsi:
             self.env_clip[env_ids] = self.motion.sample_clip(objects)
             T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float()   # (n,)
-            self.time_steps[env_ids] = (torch.rand(n, device=self.device) * T_per_env).long().clamp(min=0)
         else:
             # self.env_clip[env_ids] = self.motion.first_clip(objects)
             # self.time_steps[env_ids] = 0
             self.env_clip[env_ids] = self.motion.clip_at(objects, self._eval_clip_idx[env_ids])
             self._eval_clip_idx[env_ids] += 1
-            self.time_steps[env_ids] = 0
+        self.time_steps[env_ids] = 0
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
         new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])
