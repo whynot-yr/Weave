@@ -47,14 +47,8 @@ LARGEBOX_CFG = _object_cfg(
     mass_props=sim_utils.MassPropertiesCfg(density=25)
 )   # ~1 kg
 LARGETABLE_CFG = _object_cfg(LARGETABLE_USD_PATH)
-MONITOR_CFG = _object_cfg(MONITOR_USD_PATH)
-PLASTICBOX_CFG = _object_cfg(PLASTICBOX_USD_PATH)
 SMALLBOX_CFG = _object_cfg(SMALLBOX_USD_PATH)
 SMALLTABLE_CFG = _object_cfg(SMALLTABLE_USD_PATH)
-SUITCASE_CFG = _object_cfg(
-    SUITCASE_USD_PATH, 
-    mass_props=sim_utils.MassPropertiesCfg(density=25)
-)   # ~1 kg
 TRASHCAN_CFG = _object_cfg(TRASHCAN_USD_PATH)
 TRIPOD_CFG = _object_cfg(TRIPOD_USD_PATH)
 WHITECHAIR_CFG = _object_cfg(WHITECHAIR_USD_PATH)
@@ -65,11 +59,8 @@ OBJECT_CFG_BY_NAME = {
     "floorlamp":    FLOORLAMP_CFG,
     "largebox":     LARGEBOX_CFG,
     "largetable":   LARGETABLE_CFG,
-    "monitor":      MONITOR_CFG,
-    "plasticbox":   PLASTICBOX_CFG,
     "smallbox":     SMALLBOX_CFG,
     "smalltable":   SMALLTABLE_CFG,
-    "suitcase":     SUITCASE_CFG,
     "trashcan":     TRASHCAN_CFG,
     "tripod":       TRIPOD_CFG,
     "whitechair":   WHITECHAIR_CFG,

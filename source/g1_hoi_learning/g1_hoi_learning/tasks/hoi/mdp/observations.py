@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from isaaclab.envs import ManagerBasedEnv
+from isaaclab.managers import ManagerTermBase
 from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, subtract_frame_transforms, transform_points
 
 from g1_hoi_learning.models.object_encoder import get_object_encoder
@@ -26,12 +27,6 @@ def motion_future_joint_pos(env: ManagerBasedEnv, command_name: str) -> torch.Te
     """Future reference joint positions for configured offsets."""
     command: MotionCommand = env.command_manager.get_term(command_name)
     return command.future_joint_pos.reshape(env.num_envs, -1)
-
-
-def motion_future_joint_vel(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Future reference joint velocities for configured offsets."""
-    command: MotionCommand = env.command_manager.get_term(command_name)
-    return command.future_joint_vel.reshape(env.num_envs, -1)
 
 
 def motion_anchor_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
@@ -114,36 +109,6 @@ def motion_future_anchor_ori_b(env: ManagerBasedEnv, command_name: str) -> torch
     return mat[..., :2].reshape(env.num_envs, -1)
 
 
-def motion_future_body_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Future tracked-body positions in current robot anchor frame. (num_envs, num_offsets * num_bodies * 3)"""
-    command: MotionCommand = env.command_manager.get_term(command_name)
-    bi = command.body_indices
-    n_offsets = len(command.cfg.future_offsets)
-    n_bodies = len(bi)
-    # future_body_pos_w: (num_envs, num_offsets, num_all_bodies, 3) -> select tracked bodies
-    future_pos = command.future_body_pos_w[:, :, bi]  # (num_envs, num_offsets, num_bodies, 3)
-    future_quat = command.future_body_quat_w[:, :, bi]
-    anchor_pos = command.robot_anchor_pos_w[:, None, None, :].expand(-1, n_offsets, n_bodies, -1)
-    anchor_quat = command.robot_anchor_quat_w[:, None, None, :].expand(-1, n_offsets, n_bodies, -1)
-    pos_b, _ = subtract_frame_transforms(anchor_pos, anchor_quat, future_pos, future_quat)
-    return pos_b.reshape(env.num_envs, -1)
-
-
-def motion_future_body_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Future tracked-body orientations in current robot anchor frame. (num_envs, num_offsets * num_bodies * 6)"""
-    command: MotionCommand = env.command_manager.get_term(command_name)
-    bi = command.body_indices
-    n_offsets = len(command.cfg.future_offsets)
-    n_bodies = len(bi)
-    future_pos = command.future_body_pos_w[:, :, bi]
-    future_quat = command.future_body_quat_w[:, :, bi]
-    anchor_pos = command.robot_anchor_pos_w[:, None, None, :].expand(-1, n_offsets, n_bodies, -1)
-    anchor_quat = command.robot_anchor_quat_w[:, None, None, :].expand(-1, n_offsets, n_bodies, -1)
-    _, ori_b = subtract_frame_transforms(anchor_pos, anchor_quat, future_pos, future_quat)
-    mat = matrix_from_quat(ori_b)
-    return mat[..., :2].reshape(env.num_envs, -1)
-
-
 def robot_body_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     """Robot tracked-body positions in the robot's anchor frame."""
     command: MotionCommand = env.command_manager.get_term(command_name)
@@ -221,36 +186,43 @@ def object_point_cloud_b(env: ManagerBasedEnv, command_name: str) -> torch.Tenso
     # surface points: object frame -> world
     pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
     P = pts_w.shape[1]
-    
+
     pts_b = quat_apply_inverse(
         command.robot_anchor_quat_w[:, None, :].expand(-1, P, -1),
         pts_w - command.robot_anchor_pos_w[:, None, :],
     )
     return get_object_encoder(pts_b.device)(pts_b)   # (num_envs, output_dim)
 
-def object_nearest_point_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Per-body vector from each robot body to its nearest point on the object surface,
-    expressed in the robot anchor frame. (num_envs, num_bodies * 3)
+
+class object_nearest_point_b(ManagerTermBase):
+    """Per-body vector from a robot body to its nearest point on the object surface, expressed in
+    the robot anchor frame. (num_envs, len(body_names) * 3)
     """
-    command: MotionCommand = env.command_manager.get_term(command_name)
-    # per-env surface points: pick this env's object's surface from (N, P, 3)
-    pts_local = command.motion.surface[command.env_object]    # (num_envs, P, 3) object frame
-    # surface points: object frame -> world
-    pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
-    body_pos_w = command.robot_body_pos_w   # (num_envs, B, 3)
-    B = body_pos_w.shape[1]
-    # nearest point per body
-    dist = torch.cdist(body_pos_w, pts_w)             # (num_envs, B, P)
-    idx = dist.argmin(dim=-1)                          # (num_envs, B)
-    nearest_w = pts_w.gather(1, idx.unsqueeze(-1).expand(-1, -1, 3))  # (num_envs, B, 3)
-    # vector body -> nearest point, in world
-    diff_w = nearest_w - body_pos_w
-    # rotate into anchor frame
-    diff_b = quat_apply_inverse(
-        command.robot_anchor_quat_w[:, None, :].expand(-1, B, -1),
-        diff_w,
-    )
-    return diff_b.reshape(env.num_envs, -1)
+
+    def __init__(self, cfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self.body_ids, self.body_names = env.scene["robot"].find_bodies(cfg.params["body_names"])
+
+    def __call__(self, env: ManagerBasedEnv, command_name: str, body_names: list[str]) -> torch.Tensor:
+        command: MotionCommand = env.command_manager.get_term(command_name)
+        # per-env surface points: pick this env's object's surface from (N, P, 3)
+        pts_local = command.motion.surface[command.env_object]    # (num_envs, P, 3) object frame
+        # surface points: object frame -> world
+        pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
+        body_pos_w = command.robot_body_pos_w[:, self.body_ids]   # (num_envs, B, 3)
+        B = body_pos_w.shape[1]
+        # nearest point per body
+        dist = torch.cdist(body_pos_w, pts_w)             # (num_envs, B, P)
+        idx = dist.argmin(dim=-1)                          # (num_envs, B)
+        nearest_w = pts_w.gather(1, idx.unsqueeze(-1).expand(-1, -1, 3))  # (num_envs, B, 3)
+        # vector body -> nearest point, in world
+        diff_w = nearest_w - body_pos_w
+        # rotate into anchor frame
+        diff_b = quat_apply_inverse(
+            command.robot_anchor_quat_w[:, None, :].expand(-1, B, -1),
+            diff_w,
+        )
+        return diff_b.reshape(env.num_envs, -1)
 
 
 def motion_future_obj_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:

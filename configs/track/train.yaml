@@ -22,17 +22,17 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/train/clothesstand_311clip.npz
-        - ./data/train/floorlamp_289clip.npz
-        - ./data/train/largebox_287clip.npz
-        - ./data/train/largetable_270clip.npz
-        - ./data/train/smallbox_252clip.npz
-        - ./data/train/smalltable_279clip.npz
-        - ./data/train/suitcase_290clip.npz
-        - ./data/train/trashcan_253clip.npz
-        - ./data/train/tripod_429clip.npz
-        - ./data/train/whitechair_393clip.npz
-        - ./data/train/woodchair_383clip.npz
+        # - ./data/train_prepend/clothesstand_311clip_var3.npz
+        # - ./data/train_prepend/floorlamp_287clip_var3.npz
+        # - ./data/train_prepend/largebox_287clip_var3.npz
+        # - ./data/train_prepend/largetable_269clip_var3.npz
+        # - ./data/train_prepend/smallbox_252clip_var3.npz
+        # - ./data/train_prepend/smalltable_279clip_var3.npz
+        # - ./data/train_prepend/trashcan_253clip_var3.npz
+        # - ./data/train_prepend/tripod_429clip_var3.npz
+        # - ./data/train_prepend/whitechair_387clip_var3.npz
+        # - ./data/train_prepend/woodchair_370clip_var3.npz
+        - ./data/test_prepend/smalltable_42clip_var5.npz
       rsi: true
       joint_position_range: [-0.05, 0.05]
       pose_range:
@@ -61,12 +61,12 @@ env:
     motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
     object_pos:           { weight: 2.0, params: { command_name: motion, std: 0.2 } }
     object_ori:           { weight: 2.0, params: { command_name: motion, std: 0.3 } }
-    hand_obj_rel_pos:
+    hand_opposition:
       weight: 2.0
       params:
         command_name: motion
-        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
-        std: 0.1
+        thumb_body_name: thumb_distal
+        finger_body_names: [index_intermediate, middle_intermediate, ring_intermediate, pinky_intermediate]
     contact:
       weight: 2.0
       params:
@@ -112,14 +112,14 @@ agent:
 
   policy:
     init_noise_std: 0.5
-    actor_hidden_dim: 1024
-    critic_hidden_dim: 1024
+    actor_hidden_dim: 512
+    critic_hidden_dim: 512
     actor_num_blocks: 1
     critic_num_blocks: 2
     expansion: 4
     latent_dim: 128
     encoder_hidden_dims:
-      ref_motion_body: { type: mlp, hidden_dims: [512, 256] }
+      ref_motion_body: { type: mlp, hidden_dims: [256] }
       ref_motion_object: { type: mlp, hidden_dims: [256] }
       object_state: { type: mlp, hidden_dims: [256] }
       robot_proprio: { type: mlp, hidden_dims: [256] }

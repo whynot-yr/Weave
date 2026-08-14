@@ -237,12 +237,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print("[WARN] Simulation app closed before every clip finished; results are partial.")
             break
         start_time = time.time()
-        evaluator.collect()
         with torch.inference_mode():
+            evaluator.collect()
             actions = policy(obs)
             obs, _, dones, extras = env.step(actions)
             policy_nn.reset(dones)
-        evaluator.update(dones, extras["time_outs"])
+            evaluator.update(dones, extras["time_outs"])
         n_done, n_ok = int(evaluator.finished.sum()), int(evaluator.success.sum())
         pbar.set_postfix_str(f"done {n_done}/{env.num_envs} | ok {n_ok} | succ {n_ok / max(n_done, 1)*100:.2f}%")
         if evaluator.done:

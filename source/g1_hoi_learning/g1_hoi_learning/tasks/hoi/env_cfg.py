@@ -111,7 +111,7 @@ class CommandsCfg:
 
     motion = MotionCommandCfg(
         resampling_time_range=(1.0e9, 1.0e9),
-        debug_vis=True,
+        debug_vis=False,
         rsi=True,
         pose_range={
             "x": (-0.05, 0.05),
@@ -175,11 +175,8 @@ class ObservationsCfg:
         """Dense future reference of the robot bodies."""
 
         motion_future_joint_pos = ObsTerm(func=mdp.motion_future_joint_pos, params={"command_name": "motion"})
-        motion_future_joint_vel = ObsTerm(func=mdp.motion_future_joint_vel, params={"command_name": "motion"})
         motion_future_anchor_pos_b = ObsTerm(func=mdp.motion_future_anchor_pos_b, params={"command_name": "motion"})
         motion_future_anchor_ori_b = ObsTerm(func=mdp.motion_future_anchor_ori_b, params={"command_name": "motion"})
-        motion_future_body_pos_b = ObsTerm(func=mdp.motion_future_body_pos_b, params={"command_name": "motion"})
-        motion_future_body_ori_b = ObsTerm(func=mdp.motion_future_body_ori_b, params={"command_name": "motion"})
 
         def __post_init__(self):
             self.concatenate_terms = True
@@ -201,7 +198,13 @@ class ObservationsCfg:
 
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
-        object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
+        object_nearest_point_b = ObsTerm(
+            func=mdp.object_nearest_point_b,
+            params={
+                "command_name": "motion",
+                "body_names": [".*_thumb_distal", ".*_(index|middle|ring|pinky)_intermediate"],
+            },
+        )
         object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
         contact = ObsTerm(func=mdp.contact, params={"sensor_name": "contact_sensor"})
 
@@ -345,14 +348,16 @@ class RewardsCfg:
         weight=1.0,
         params={"command_name": "motion", "std": 0.4},
     )
-    # hand-object relative position (hand bodies in the object frame)
-    hand_obj_rel_pos = RewTerm(
-        func=mdp.motion_hand_obj_relative_pos_error_exp,
+    # reference-free grasp shape: thumb opposing the other fingers across the object surface
+    hand_opposition = RewTerm(
+        func=mdp.hand_opposition_reward,
         weight=2.0,
         params={
             "command_name": "motion",
-            "hand_body_names": [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"],
-            "std": 0.1,
+            "thumb_body_name": "thumb_distal",
+            "finger_body_names": [
+                "index_intermediate", "middle_intermediate", "ring_intermediate", "pinky_intermediate",
+            ],
         },
     )
     # contact
@@ -388,6 +393,12 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+
+    clip_end = DoneTerm(
+        func=mdp.motion_clip_end,
+        params={"command_name": "motion"},
+        time_out=True,
+    )
 
     anchor_pos = DoneTerm(
         func=mdp.bad_anchor_pos,

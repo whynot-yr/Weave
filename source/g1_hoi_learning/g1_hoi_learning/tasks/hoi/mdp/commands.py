@@ -217,7 +217,12 @@ class MotionCommand(CommandTerm):
 
         # caches refreshed in _update_command
         self._current_frame: MotionData | None = None
-        self._future_frame: MotionData | None = None
+        self._future_joint_pos: torch.Tensor
+        self._future_anchor_pos: torch.Tensor
+        self._future_anchor_quat: torch.Tensor
+        self._future_obj_pos: torch.Tensor
+        self._future_obj_quat: torch.Tensor
+        self._future_contact_label: torch.Tensor
 
         self.metrics["error_anchor_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_anchor_rot"] = torch.zeros(self.num_envs, device=self.device)
@@ -239,8 +244,14 @@ class MotionCommand(CommandTerm):
         future_t = self.time_steps[:, None] + self.future_offsets[None, :]    # (E, K)
         clip_end = self.motion.clip_lengths[self.env_clip][:, None]           # (E, 1)
         future_t = future_t.minimum(clip_end - 1)
-        clip_ids = self.env_clip[:, None].expand_as(future_t)
-        self._future_frame = self.motion.frames(clip_ids, future_t)
+        frame_indices = self.motion.clip_starts[self.env_clip][:, None] + future_t
+        buffer = self.motion.buffer
+        self._future_joint_pos = buffer.joint_pos[frame_indices]
+        self._future_anchor_pos = buffer.body_pos_w[frame_indices, self.anchor_index]
+        self._future_anchor_quat = buffer.body_quat_w[frame_indices, self.anchor_index]
+        self._future_obj_pos = buffer.object_pos_w[frame_indices]
+        self._future_obj_quat = buffer.object_quat_w[frame_indices]
+        self._future_contact_label = buffer.contact_label[frame_indices]
 
     # ------------------------------------------------------------------- command
 
@@ -295,27 +306,15 @@ class MotionCommand(CommandTerm):
     @property
     def future_joint_pos(self) -> torch.Tensor:
         # (E, K, 53) — caller flattens last two dims if needed
-        return self._future_frame.joint_pos
-
-    @property
-    def future_joint_vel(self) -> torch.Tensor:
-        return self._future_frame.joint_vel
-
-    @property
-    def future_body_pos_w(self) -> torch.Tensor:
-        return self._future_frame.body_pos_w + self._env.scene.env_origins[:, None, None, :]
-
-    @property
-    def future_body_quat_w(self) -> torch.Tensor:
-        return self._future_frame.body_quat_w
+        return self._future_joint_pos
 
     @property
     def future_anchor_pos_w(self) -> torch.Tensor:
-        return self._future_frame.body_pos_w[:, :, self.anchor_index] + self._env.scene.env_origins[:, None, :]
+        return self._future_anchor_pos + self._env.scene.env_origins[:, None, :]
 
     @property
     def future_anchor_quat_w(self) -> torch.Tensor:
-        return self._future_frame.body_quat_w[:, :, self.anchor_index]
+        return self._future_anchor_quat
 
     # ------------------------------------------------------------------- reference object data (current + future)
 
@@ -337,11 +336,11 @@ class MotionCommand(CommandTerm):
 
     @property
     def future_obj_pos_w(self) -> torch.Tensor:
-        return self._future_frame.object_pos_w + self._env.scene.env_origins[:, None, :]
+        return self._future_obj_pos + self._env.scene.env_origins[:, None, :]
 
     @property
     def future_obj_quat_w(self) -> torch.Tensor:
-        return self._future_frame.object_quat_w
+        return self._future_obj_quat
 
     # ------------------------------------------------------------------- contact labels
 
@@ -351,7 +350,7 @@ class MotionCommand(CommandTerm):
 
     @property
     def future_contact_label(self) -> torch.Tensor:
-        return self._future_frame.contact_label
+        return self._future_contact_label
 
     # ------------------------------------------------------------------- robot data passthrough
 
@@ -440,17 +439,13 @@ class MotionCommand(CommandTerm):
         n = len(env_ids)
         objects = self.env_object[env_ids]
 
-        # 1. pick which clip each reset env plays (within its fixed object), then RSI the time
+        # 1. pick which clip each reset env plays (within its fixed object); always start at frame 0
         if self.cfg.eval_mode:
             self.env_clip[env_ids] = self._eval_env_clip[env_ids]
         elif self.cfg.rsi:
             self.env_clip[env_ids] = self.motion.sample_clip(objects)
-            T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float()   # (n,)
         else:
-            # self.env_clip[env_ids] = self.motion.first_clip(objects)
-            # self.time_steps[env_ids] = 0
-            self.env_clip[env_ids] = self.motion.clip_at(objects, self._eval_clip_idx[env_ids])
-            self._eval_clip_idx[env_ids] += 1
+            self.env_clip[env_ids] = self.motion.first_clip(objects)
         self.time_steps[env_ids] = 0
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
@@ -512,13 +507,12 @@ class MotionCommand(CommandTerm):
         ], dim=-1)
         self.object.write_root_state_to_sim(obj_state, env_ids=env_ids)
 
-    def _update_command(self):
+    def _update_command(self) -> None:
         self.time_steps += 1
-        clip_end = self.motion.clip_lengths[self.env_clip]    # (num_envs,)
-        if self.cfg.eval_mode:
-            torch.minimum(self.time_steps, clip_end - 1, out=self.time_steps)
-        else:
-            self._resample_command(torch.where(self.time_steps >= clip_end)[0])
+
+        clip_last = self.motion.clip_lengths[self.env_clip] - 1
+        torch.minimum(self.time_steps, clip_last, out=self.time_steps)
+
         # refresh caches once for the rest of the step
         self._refresh_caches()
 

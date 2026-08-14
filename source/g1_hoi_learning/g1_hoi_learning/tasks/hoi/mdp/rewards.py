@@ -6,7 +6,7 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import ManagerTermBase, RewardTermCfg, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
-from isaaclab.utils.math import quat_apply_inverse, quat_error_magnitude
+from isaaclab.utils.math import quat_apply_inverse, quat_error_magnitude, transform_points
 
 from .commands import MotionCommand
 
@@ -188,6 +188,61 @@ class contact_reward(ManagerTermBase):
         err = (target - sim_strength).abs() * mask
         score = 1.0 - err
         return (score * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)
+
+
+# -- Reference-free grasp shape --
+class hand_opposition_reward(ManagerTermBase):
+    """Reward the thumb for opposing the other fingers across the object surface. Range [0, 1].
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        robot: Articulation = env.scene["robot"]
+        thumb, fingers = [], []
+        for side in ("L", "R"):
+            thumb.append(robot.body_names.index(f"{side}_{cfg.params['thumb_body_name']}"))
+            fingers.append([robot.body_names.index(f"{side}_{n}") for n in cfg.params["finger_body_names"]])
+        self.thumb_idx = torch.tensor(thumb, device=env.device)                # (H,)
+        self.finger_idx = torch.tensor(fingers, device=env.device)             # (H, F)
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        thumb_body_name: str,
+        finger_body_names: list[str],
+        num_nearest: int = 1,
+    ) -> torch.Tensor:
+        command: MotionCommand = env.command_manager.get_term(command_name)
+
+        # object surface points of each env's own object, in world
+        pts_local = command.motion.surface[command.env_object]                 # (N, P, 3)
+        pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)
+
+        H, F = self.finger_idx.shape
+        tips = torch.cat([self.thumb_idx[:, None], self.finger_idx], dim=-1).reshape(-1)   # (H*(F+1),)
+        tip_pos_w = command.robot_body_pos_w[:, tips]                          # (N, H*(F+1), 3)
+
+        # nearest surface point per fingertip; averaging the k nearest smooths the argmin's jump
+        # between neighbouring samples once a fingertip is close to the surface
+        dist = torch.cdist(tip_pos_w, pts_w)                                   # (N, H*(F+1), P)
+        k = max(1, min(num_nearest, pts_w.shape[1]))
+        idx = dist.topk(k, dim=-1, largest=False).indices                      # (N, H*(F+1), k)
+        nearest_w = pts_w[torch.arange(pts_w.shape[0], device=idx.device)[:, None, None], idx].mean(-2)
+
+        # unit bearing vectors: object surface -> fingertip
+        bearing = tip_pos_w - nearest_w
+        u = bearing / bearing.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        u = u.reshape(-1, H, F + 1, 3)
+        u_thumb, u_fingers = u[:, :, :1], u[:, :, 1:]                          # (N, H, 1, 3), (N, H, F, 3)
+
+        # 1 when the thumb opposes the finger across the object, 0 when both sit on the same side
+        opposition = (1.0 - (u_thumb * u_fingers).sum(-1)) / 2.0               # (N, H, F)
+
+        # score a hand only while the reference has any of its fingertips in contact
+        tips_by_hand = torch.cat([self.thumb_idx[:, None], self.finger_idx], dim=-1)   # (H, F+1)
+        gate = (command.ref_contact_label[:, tips_by_hand] > 0).any(-1).float()        # (N, H)
+        return (opposition.mean(-1) * gate).sum(-1) / gate.sum(-1).clamp(min=1.0)      # (N,)
 
 
 # -- Feet slip penalty --
