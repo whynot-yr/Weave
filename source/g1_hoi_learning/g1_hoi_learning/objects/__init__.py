@@ -2,7 +2,7 @@ import os
 
 ASSET_DIR = os.path.abspath(os.path.dirname(__file__))
 
-CLOTHESSTAND_USD_PATH = os.path.join(ASSET_DIR, "clothesstand/clothesstand.usd")
+CLOTHESSTAND_USD_PATH = os.path.join(ASSET_DIR, "clothesstand/clothesstand.usda")
 FLOORLAMP_USD_PATH = os.path.join(ASSET_DIR, "floorlamp/floorlamp.usd")
 LARGEBOX_USD_PATH = os.path.join(ASSET_DIR, "largebox/largebox.usd")
 LARGETABLE_USD_PATH = os.path.join(ASSET_DIR, "largetable/largetable.usd")

@@ -33,18 +33,3 @@ env:
         # - ./data/test_prepend/woodchair_46clip_var5.npz
         - ./data/test_prepend/smalltable_42clip_var5.npz
       rsi: false
-      joint_position_range: [0.0, 0.0]
-      pose_range:
-        x: [0.0, 0.0]
-        y: [0.0, 0.0]
-        z: [0.0, 0.0]
-        roll: [0.0, 0.0]
-        pitch: [0.0, 0.0]
-        yaw: [0.0, 0.0]
-      velocity_range:
-        x: [0.0, 0.0]
-        y: [0.0, 0.0]
-        z: [0.0, 0.0]
-        roll: [0.0, 0.0]
-        pitch: [0.0, 0.0]
-        yaw: [0.0, 0.0]

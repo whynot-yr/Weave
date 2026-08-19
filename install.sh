@@ -225,33 +225,6 @@ done
 echo "📦 Installing g1_hoi_learning..."
 uv pip install --quiet --python "$VENV/bin/python" -e "$REPO_DIR/source/g1_hoi_learning"
 
-# ---------------------------------------------------------------- PointNet++ CUDA ops
-if "$VENV/bin/python" -c 'import pointnet2_ops._ext' >/dev/null 2>&1; then
-    echo "✅ pointnet2_ops already built"
-else
-    echo "🔨 Building pointnet2_ops for compute capability $COMPUTE_CAP..."
-    (
-        SP="$("$VENV/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
-        export CUDA_HOME
-        export PATH="$CUDA_HOME/bin:$PATH"
-        export TORCH_CUDA_ARCH_LIST="$COMPUTE_CAP"   # setup.py only setdefault()s this
-        # torch's ATen headers need the cublas/cusparse headers; keep the other CUDA major out
-        if [ "$CUDA_MAJOR" -eq 13 ]; then
-            CPATH="$(ls -d "$SP"/nvidia/*/include 2>/dev/null | tr '\n' ':' || true)"
-        else
-            CPATH="$(ls -d "$SP"/nvidia/*/include 2>/dev/null | grep -v /cu13/ | tr '\n' ':' || true)"
-        fi
-        export CPATH
-        export PYTHONPATH=   # keep Isaac's prebundle off the build's sys.path
-        rm -rf "$REPO_DIR/third_party/pointnet2_ops_lib/build" \
-               "$REPO_DIR"/third_party/pointnet2_ops_lib/*.egg-info   # stale .o across CUDA versions
-        # --no-deps: install_requires is "torch>=1.4", which would drag torch off PyPI
-        uv pip install --python "$VENV/bin/python" --no-build-isolation --no-deps \
-            "$REPO_DIR/third_party/pointnet2_ops_lib"
-    )
-    echo "✅ pointnet2_ops built"
-fi
-
 # ---------------------------------------------------------------- verify
 echo ""
 echo "🔍 Verifying installation..."
@@ -260,7 +233,6 @@ from importlib.metadata import version
 
 import numpy
 import torch
-from pointnet2_ops import pointnet2_utils as pu
 from torch.optim import Muon  # noqa: F401  (torch >= 2.10)
 
 print(f"   ✅ torch          {torch.__version__}  (CUDA {torch.version.cuda})")
@@ -276,8 +248,6 @@ print(f"   ✅ CUDA device    {torch.cuda.get_device_name(0)}")
 # Conv2d is the only cuDNN user in this pipeline, so it is what exposes cu12/cu13 mixups
 torch.nn.Conv2d(1, 1, 3).cuda()(torch.randn(1, 1, 8, 8, device="cuda"))
 print(f"   ✅ cuDNN          {torch.backends.cudnn.version()}")
-out = pu.furthest_point_sample(torch.randn(2, 512, 3, device="cuda"), 64)
-print(f"   ✅ pointnet2_ops  furthest_point_sample -> {tuple(out.shape)}")
 PY
 
 echo ""

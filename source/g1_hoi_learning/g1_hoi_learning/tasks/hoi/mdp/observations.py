@@ -4,11 +4,19 @@ import torch
 
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import ManagerTermBase
-from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, subtract_frame_transforms, transform_points
+from isaaclab.utils.math import (
+    matrix_from_quat,
+    quat_apply,
+    quat_apply_inverse,
+    quat_conjugate,
+    quat_mul,
+    subtract_frame_transforms,
+)
 
-from g1_hoi_learning.models.object_encoder import get_object_encoder
+from g1_hoi_learning.objects import ASSET_DIR
 
 from .commands import MotionCommand
+from .geometry import SampledSurfaceQuery, load_bps_sdf_assets, sample_sdf_trilinear
 
 
 def motion_joint_pos(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
@@ -176,22 +184,33 @@ def motion_future_obj_pos_b(env: ManagerBasedEnv, command_name: str) -> torch.Te
     return pos_b.reshape(env.num_envs, -1)
 
 
-def object_point_cloud_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Frozen PointNet++ embedding of the object surface point cloud.
-    Returns (num_envs, encoder.output_dim).
-    """
-    command: MotionCommand = env.command_manager.get_term(command_name)
-    # per-env surface points: pick this env's object's surface from (N, P, 3)
-    pts_local = command.motion.surface[command.env_object]    # (num_envs, P, 3) object frame
-    # surface points: object frame -> world
-    pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
-    P = pts_w.shape[1]
+class ObjectBpsSdf(ManagerTermBase):
+    """Signed distances from a fixed 128-point BPS basis to the normalized object mesh."""
 
-    pts_b = quat_apply_inverse(
-        command.robot_anchor_quat_w[:, None, :].expand(-1, P, -1),
-        pts_w - command.robot_anchor_pos_w[:, None, :],
-    )
-    return get_object_encoder(pts_b.device)(pts_b)   # (num_envs, output_dim)
+    def __init__(self, cfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self.command: MotionCommand = env.command_manager.get_term(cfg.params["command_name"])
+        self.basis, self.sdf_grids, self.grid_bound = load_bps_sdf_assets(
+            ASSET_DIR,
+            self.command.motion.object_names,
+            self.command.motion.device,
+        )
+
+    def __call__(self, env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+        del env, command_name
+        command = self.command
+        num_basis = self.basis.shape[0]
+        object_from_anchor = quat_mul(quat_conjugate(command.obj_quat_w), command.robot_anchor_quat_w)
+        query_points_o = quat_apply(
+            object_from_anchor[:, None, :].expand(-1, num_basis, -1),
+            self.basis[None, :, :].expand(command.num_envs, -1, -1),
+        )
+        return sample_sdf_trilinear(
+            self.sdf_grids,
+            command.env_object,
+            query_points_o,
+            self.grid_bound,
+        )
 
 
 class object_nearest_point_b(ManagerTermBase):
@@ -201,25 +220,31 @@ class object_nearest_point_b(ManagerTermBase):
 
     def __init__(self, cfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
+        self.command: MotionCommand = env.command_manager.get_term(cfg.params["command_name"])
         self.body_ids, self.body_names = env.scene["robot"].find_bodies(cfg.params["body_names"])
+        self.surface_query = SampledSurfaceQuery(self.command.motion.surface, self.command.env_object)
+        self.nearest_o = torch.empty(
+            (env.num_envs, len(self.body_ids), 3),
+            device=env.device,
+            dtype=self.command.motion.surface.dtype,
+        )
 
     def __call__(self, env: ManagerBasedEnv, command_name: str, body_names: list[str]) -> torch.Tensor:
-        command: MotionCommand = env.command_manager.get_term(command_name)
-        # per-env surface points: pick this env's object's surface from (N, P, 3)
-        pts_local = command.motion.surface[command.env_object]    # (num_envs, P, 3) object frame
-        # surface points: object frame -> world
-        pts_w = transform_points(pts_local, pos=command.obj_pos_w, quat=command.obj_quat_w)  # (num_envs, P, 3)
-        body_pos_w = command.robot_body_pos_w[:, self.body_ids]   # (num_envs, B, 3)
-        B = body_pos_w.shape[1]
-        # nearest point per body
-        dist = torch.cdist(body_pos_w, pts_w)             # (num_envs, B, P)
-        idx = dist.argmin(dim=-1)                          # (num_envs, B)
-        nearest_w = pts_w.gather(1, idx.unsqueeze(-1).expand(-1, -1, 3))  # (num_envs, B, 3)
-        # vector body -> nearest point, in world
-        diff_w = nearest_w - body_pos_w
-        # rotate into anchor frame
+        del command_name, body_names
+        command = self.command
+        body_pos_w = command.robot_body_pos_w[:, self.body_ids]                # (num_envs, B, 3)
+        num_bodies = body_pos_w.shape[1]
+
+        body_pos_o = quat_apply_inverse(
+            command.obj_quat_w[:, None, :].expand(-1, num_bodies, -1),
+            body_pos_w - command.obj_pos_w[:, None, :],
+        )
+        nearest_o = self.surface_query(body_pos_o, self.nearest_o)
+        diff_o = nearest_o - body_pos_o
+
+        diff_w = quat_apply(command.obj_quat_w[:, None, :].expand(-1, num_bodies, -1), diff_o)
         diff_b = quat_apply_inverse(
-            command.robot_anchor_quat_w[:, None, :].expand(-1, B, -1),
+            command.robot_anchor_quat_w[:, None, :].expand(-1, num_bodies, -1),
             diff_w,
         )
         return diff_b.reshape(env.num_envs, -1)

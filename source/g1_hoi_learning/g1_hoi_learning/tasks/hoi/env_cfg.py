@@ -21,7 +21,7 @@ from .mdp.commands import MotionCommandCfg
 # Pre-defined configs
 ##
 from g1_hoi_learning.robots.g1_inspire import G1_INSPIRE_CFG  # isort:skip
-
+from g1_hoi_learning.assets import GROUND_PLANE_USD_PATH
 
 ##
 # Scene definition
@@ -35,6 +35,7 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.GroundPlaneCfg(
+            usd_path=GROUND_PLANE_USD_PATH,
             size=(100.0, 100.0),
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 static_friction=1.0,
@@ -55,8 +56,8 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
 
     contact_sensor = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Object",
-        history_length=2,
-        track_air_time=True,
+        history_length=0,
+        track_air_time=False,
         filter_prim_paths_expr=[
             # robot.body_names order
             "{ENV_REGEX_NS}/Robot/pelvis",
@@ -113,27 +114,6 @@ class CommandsCfg:
         resampling_time_range=(1.0e9, 1.0e9),
         debug_vis=False,
         rsi=True,
-        pose_range={
-            "x": (-0.05, 0.05),
-            "y": (-0.05, 0.05),
-            "z": (-0.01, 0.01),
-            "roll": (-0.1, 0.1),
-            "pitch": (-0.1, 0.1),
-            "yaw": (-0.2, 0.2),
-        },
-        velocity_range={
-            "x": (-0.5, 0.5),
-            "y": (-0.5, 0.5),
-            "z": (-0.2, 0.2),
-            "roll": (-0.52, 0.52),
-            "pitch": (-0.52, 0.52),
-            "yaw": (-0.78, 0.78),
-        },
-        joint_position_range=(-0.1, 0.1),
-        object_range={
-            "x": (-0.05, 0.05),
-            "y": (-0.05, 0.05),
-        },
     )
 
 
@@ -205,7 +185,7 @@ class ObservationsCfg:
                 "body_names": [".*_thumb_distal", ".*_(index|middle|ring|pinky)_intermediate"],
             },
         )
-        object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
+        object_bps_sdf_b = ObsTerm(func=mdp.ObjectBpsSdf, params={"command_name": "motion"})
         contact = ObsTerm(func=mdp.contact, params={"sensor_name": "contact_sensor"})
 
         def __post_init__(self):
@@ -292,7 +272,7 @@ class EventCfg:
 
     randomize_finger_gains = EventTerm(
         func=mdp.randomize_actuator_gains,
-        mode="reset",
+        mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*_(thumb|index|middle|ring|pinky)_.*_joint"),
             "stiffness_distribution_params": (0.5, 2.0),   # ×default 5.0
@@ -304,7 +284,7 @@ class EventCfg:
 
     randomize_finger_armature = EventTerm(
         func=mdp.randomize_joint_parameters,
-        mode="reset",
+        mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*_(thumb|index|middle|ring|pinky)_.*_joint"),
             "armature_distribution_params": (0.5, 1.5),    # ×default 0.01
@@ -393,12 +373,6 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-
-    clip_end = DoneTerm(
-        func=mdp.motion_clip_end,
-        params={"command_name": "motion"},
-        time_out=True,
-    )
 
     anchor_pos = DoneTerm(
         func=mdp.bad_anchor_pos,

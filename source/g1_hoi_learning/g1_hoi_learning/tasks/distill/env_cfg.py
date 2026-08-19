@@ -18,27 +18,6 @@ class GoalCommandsCfg:
         resampling_time_range=(1.0e9, 1.0e9),
         debug_vis=True,
         rsi=True,
-        pose_range={
-            "x": (-0.05, 0.05),
-            "y": (-0.05, 0.05),
-            "z": (-0.01, 0.01),
-            "roll": (-0.1, 0.1),
-            "pitch": (-0.1, 0.1),
-            "yaw": (-0.2, 0.2),
-        },
-        velocity_range={
-            "x": (-0.5, 0.5),
-            "y": (-0.5, 0.5),
-            "z": (-0.2, 0.2),
-            "roll": (-0.52, 0.52),
-            "pitch": (-0.52, 0.52),
-            "yaw": (-0.78, 0.78),
-        },
-        joint_position_range=(-0.05, 0.05),
-        object_range={
-            "x": (-0.05, 0.05),
-            "y": (-0.05, 0.05),
-        },
         gap=(50, None),
     )
 
@@ -136,7 +115,6 @@ class GoalObservationsCfg:
         object_pos_b = ObsTerm(func=mdp.object_pos_b, params={"command_name": "motion"})
         object_rot_b = ObsTerm(func=mdp.object_rot_b, params={"command_name": "motion"})
         object_nearest_point_b = ObsTerm(func=mdp.object_nearest_point_b, params={"command_name": "motion"})
-        object_point_cloud_b = ObsTerm(func=mdp.object_point_cloud_b, params={"command_name": "motion"})
         contact = ObsTerm(func=mdp.contact, params={"sensor_name": "contact_sensor"})
 
         def __post_init__(self):

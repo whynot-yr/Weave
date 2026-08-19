@@ -11,6 +11,8 @@ _COMMON_RIGID_PROPS = sim_utils.RigidBodyPropertiesCfg(
     max_linear_velocity=1000.0,
     max_angular_velocity=1000.0,
     max_depenetration_velocity=1.0,
+    solver_position_iteration_count=4,
+    solver_velocity_iteration_count=1,
 )
 
 _COMMON_MASS_PROPS = sim_utils.MassPropertiesCfg(density=200.0)
@@ -22,7 +24,7 @@ _COMMON_VISUAL_MATERIAL = sim_utils.PreviewSurfaceCfg(
 )
 
 _COMMON_COLLISION_PROPS = sim_utils.CollisionPropertiesCfg(
-    contact_offset=0.02,
+    contact_offset=0.005,
 )
 
 

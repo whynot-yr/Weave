@@ -31,10 +31,7 @@ from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils import configclass
 from isaaclab.utils.math import (
-    quat_error_magnitude, 
-    sample_uniform,
-    quat_from_euler_xyz,
-    quat_mul,
+    quat_error_magnitude,
 )
 
 from g1_hoi_learning.objects import ASSET_DIR
@@ -436,46 +433,34 @@ class MotionCommand(CommandTerm):
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
-        n = len(env_ids)
         objects = self.env_object[env_ids]
 
         # 1. pick which clip each reset env plays (within its fixed object); always start at frame 0
         if self.cfg.eval_mode:
             self.env_clip[env_ids] = self._eval_env_clip[env_ids]
+            self.time_steps[env_ids] = 0
         elif self.cfg.rsi:
+            n = len(env_ids)
             self.env_clip[env_ids] = self.motion.sample_clip(objects)
+            T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float() - 1   # (n,)
+            self.time_steps[env_ids] = (torch.rand(n, device=self.device) * T_per_env).long().clamp(min=0)
         else:
             self.env_clip[env_ids] = self.motion.first_clip(objects)
-        self.time_steps[env_ids] = 0
+            self.time_steps[env_ids] = 0
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
         new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])
 
         # 3. root pose from motion's anchor pose
-        root_pos      = new_frames.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins[env_ids]
-        root_ori      = new_frames.body_quat_w[:, self.anchor_index]
-        root_lin_vel  = new_frames.body_lin_vel_w[:, self.anchor_index]
-        root_ang_vel  = new_frames.body_ang_vel_w[:, self.anchor_index]
-
-        range_list = [self.cfg.pose_range.get(key, (0, 0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
-        ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], size=(n, 6), device=self.device)
-
-        root_pos += rand_samples[:, :3]
-        orientation_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
-        root_ori = quat_mul(orientation_delta, root_ori)
-
-        range_list = [self.cfg.velocity_range.get(key, (0, 0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
-        ranges = torch.tensor(range_list, device=self.device)
-        rand_samples = sample_uniform(ranges[:, 0], ranges[:, 1], size=(n, 6), device=self.device)
-        root_lin_vel += rand_samples[:, :3]
-        root_ang_vel += rand_samples[:, 3:]
+        root_pos = new_frames.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins[env_ids]
+        root_ori = new_frames.body_quat_w[:, self.anchor_index]
+        root_lin_vel = new_frames.body_lin_vel_w[:, self.anchor_index]
+        root_ang_vel = new_frames.body_ang_vel_w[:, self.anchor_index]
 
         # 4. joint positions from motion
         joint_pos = new_frames.joint_pos
         joint_vel = new_frames.joint_vel
 
-        joint_pos += sample_uniform(*self.cfg.joint_position_range, joint_pos.shape, device=self.device)
         soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
         joint_pos = torch.clip(
             joint_pos,
@@ -493,12 +478,6 @@ class MotionCommand(CommandTerm):
         # 6. reset object to its motion's reference (with env_origins offset)
         obj_pos = new_frames.object_pos_w + self._env.scene.env_origins[env_ids]
 
-        obj_range = torch.tensor(
-            [self.cfg.object_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z"]],
-            device=self.device,
-        )
-        obj_pos = obj_pos + sample_uniform(obj_range[:, 0], obj_range[:, 1], size=(n, 3), device=self.device)
-
         obj_state = torch.cat([
             obj_pos,
             new_frames.object_quat_w,
@@ -507,12 +486,13 @@ class MotionCommand(CommandTerm):
         ], dim=-1)
         self.object.write_root_state_to_sim(obj_state, env_ids=env_ids)
 
-    def _update_command(self) -> None:
+    def _update_command(self):
         self.time_steps += 1
-
-        clip_last = self.motion.clip_lengths[self.env_clip] - 1
-        torch.minimum(self.time_steps, clip_last, out=self.time_steps)
-
+        clip_end = self.motion.clip_lengths[self.env_clip]    # (num_envs,)
+        if self.cfg.eval_mode:
+            torch.minimum(self.time_steps, clip_end - 1, out=self.time_steps)
+        else:
+            self._resample_command(torch.where(self.time_steps >= clip_end)[0])
         # refresh caches once for the rest of the step
         self._refresh_caches()
 
@@ -588,11 +568,6 @@ class MotionCommandCfg(CommandTermCfg):
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""
-
-    pose_range: dict[str, tuple[float, float]] = {}
-    velocity_range: dict[str, tuple[float, float]] = {}
-    joint_position_range: tuple[float, float] = (-0.1, 0.1)
-    object_range: dict[str, tuple[float, float]] = {}
 
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/World/Visuals/Command/anchor")
     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)

@@ -19,24 +19,6 @@ env:
       motion_files:
         - ./data/train/smalltable_279clip.npz
       rsi: true
-      joint_position_range: [-0.05, 0.05]
-      pose_range:
-        x: [-0.05, 0.05]
-        y: [-0.05, 0.05]
-        z: [-0.01, 0.01]
-        roll: [-0.1, 0.1]
-        pitch: [-0.1, 0.1]
-        yaw: [-0.2, 0.2]
-      velocity_range:
-        x: [-0.5, 0.5]
-        y: [-0.5, 0.5]
-        z: [-0.2, 0.2]
-        roll: [-0.52, 0.52]
-        pitch: [-0.52, 0.52]
-        yaw: [-0.78, 0.78]
-      object_range:
-        x: [-0.05, 0.05]
-        y: [-0.05, 0.05]
 
   # ---- reward weights & params ----
   rewards:

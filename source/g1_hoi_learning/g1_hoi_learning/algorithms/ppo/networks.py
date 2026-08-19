@@ -81,6 +81,13 @@ class SimBaActorCritic(ActorCritic):
         else:
             self.critic_obs_normalizer = torch.nn.Identity()
 
+        self.actor.forward = torch.compile(
+            self.actor.forward, backend="inductor", mode="default", fullgraph=True, dynamic=False
+        )
+        self.critic.forward = torch.compile(
+            self.critic.forward, backend="inductor", mode="default", fullgraph=True, dynamic=False
+        )
+
         # Action noise (state-independent)
         self.noise_std_type = noise_std_type
         if noise_std_type == "scalar":

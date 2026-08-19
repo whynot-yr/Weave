@@ -49,9 +49,6 @@ G1_INSPIRE_CFG = ArticulationCfg(
         joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
             gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
         ),
-        collision_props=sim_utils.CollisionPropertiesCfg(
-            contact_offset=0.02,
-        )
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.76),

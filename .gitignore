@@ -8,12 +8,6 @@
 **/*.dmp
 **/.thumbs
 
-# No USD files allowed in the repo
-**/*.usd
-**/*.usda
-**/*.usdc
-**/*.usdz
-
 # Python
 .DS_Store
 **/*.egg-info/
@@ -65,9 +59,6 @@ _build
 # Teleop Recorded Dataset
 /datasets/
 
-# Tests
-tests/
-
 # Docker history
 .isaac-lab-docker-history
 
@@ -84,11 +75,6 @@ tests/
 
 # data
 data/
-
-# objects assets — only python configs are tracked
-source/g1_hoi_learning/g1_hoi_learning/objects/*
-!source/g1_hoi_learning/g1_hoi_learning/objects/__init__.py
-!source/g1_hoi_learning/g1_hoi_learning/objects/object_cfg.py
 
 # model file
 *.pt
