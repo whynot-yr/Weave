@@ -27,9 +27,11 @@ env:
         # - ./data/test_prepend/largetable_36clip_var5.npz
         # - ./data/test_prepend/smallbox_24clip_var5.npz
         # - ./data/test_prepend/smalltable_42clip_var5.npz
-        # - ./data/test_prepend/trashcan_35clip_var5.npz
         # - ./data/test_prepend/tripod_30clip_var5.npz
-        # - ./data/test_prepend/whitechair_35clip_var5.npz
+        - ./data/test_prepend/whitechair_35clip_var5.npz
         # - ./data/test_prepend/woodchair_46clip_var5.npz
-        - ./data/test_prepend/smalltable_42clip_var5.npz
       rsi: false
+
+agent:
+  policy:
+    compile: false

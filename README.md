@@ -1,6 +1,6 @@
 **A single RL policy learns to reproduce mocap-retargeted manipulation motion on a Unitree G1 with Inspire dexterous hands — matching body pose, object pose, and hand contacts.**
 
-[Highlights](#-highlights) · [Architecture](#-architecture) · [Installation](#-installation) · [Data Pipeline](#-data-pipeline) · [Training](#-training) · [Evaluation](#-evaluation) · [Play](#-play)
+[Highlights](#-highlights) · [Architecture](#-architecture) · [Installation](#-installation) · [Training](#-training) · [Evaluation](#-evaluation) · [Play](#-play)
 
 ---
 
@@ -10,8 +10,9 @@
 - **Dexterous bimanual control** — G1 body + 2× Inspire hands; the passive finger joints are driven from a software mimic table, so the policy commands only the active DoF.
 - **SimBa + MuonPPO** — a residual-MLP actor-critic trained by a Muon (2-D weights) / AdamW (rest) hybrid PPO, with per-observation-group encoders and an asymmetric actor/critic.
 - **Multi-object, multi-clip** — round-robin object assignment across thousands of reference clips in a single training run.
-- **RSI + domain randomization** — reset to a random clip and frame with small robot pose/velocity/joint and object-position perturbations.
-- **Object shape conditioning** — each object's surface is embedded by a frozen PointNet++ into a compact descriptor.
+- **Reference state initialization** — every reset samples a random clip and a random start frame within it, then writes the robot and object state straight from that reference frame.
+- **Domain randomization** — applied at startup: robot and object friction/restitution, torso COM offset, and per-finger actuator stiffness, damping and armature.
+- **Object shape conditioning** — a fixed 128-point basis (BPS) is rotated into the object frame and used to sample the object's baked signed-distance field, giving a shape + relative-orientation descriptor with no learned encoder.
 
 ## 🧭 Architecture
 
@@ -34,32 +35,26 @@ graph LR
 ```
 g1_hoi_learning/
 ├── configs/
-│   ├── track/                    # {train,play}.yaml — HOI tracker (Hydra env/agent overrides)
-│   └── distill/                  # {train,play}.yaml — goal-conditioned distillation (WIP)
+│   └── track/                    # {train,play,eval}.yaml — HOI tracker (Hydra env/agent overrides)
 ├── data/
 │   ├── train/                    # <obj>_<N>clip.npz — packed multi-clip TRAIN sets
 │   └── test/                     # <obj>_<N>clip.npz — packed multi-clip TEST sets
 ├── scripts/
-│   ├── data_replay_multiple.py   # pack clips of one object (a dict pkl) → one multi-clip npz
-│   ├── sample_object_points.py   # sample (P, 3) surface points from .obj per object
+│   ├── precompute_object_sdf.py  # bake each object's normalized SDF grid + the shared BPS basis
 │   ├── list_envs.py
 │   └── rsl_rl/
 │       ├── train.py              # PPO training entry
 │       ├── play.py               # checkpoint evaluation + JIT/ONNX export
+│       ├── eval.py               # per-clip scoring → <run_dir>/eval/metrics.json
 │       └── cli_args.py           # RSL-RL specific argparse helpers
-├── third_party/
-│   └── pointnet2_ops_lib/        # PointNet++ CUDA ops
 └── source/g1_hoi_learning/g1_hoi_learning/
     ├── algorithms/
     │   ├── networks.py           # shared SimBa backbone
     │   ├── optimizers.py         # Muon (2-D weights) + AdamW (rest) split
-    │   ├── ppo/                  # MuonPPO — GroupEncoder (per-obs-group) + SimBa actor-critic + runner
-    │   └── distillation/         # MuonPPODistill + SimBa student/teacher — WIP
-    ├── models/                   # PointNet++ object point-cloud encoder
-    │   ├── object_encoder.py     # normalize → PointNet++ → mean-pool → (B, 128)
-    │   └── pointnet2_rl_encoder.py / pointnet2_rl_seg.py   # PointNet++ backbone
+    │   └── ppo/                  # MuonPPO — GroupEncoder (per-obs-group) + SimBa actor-critic + runner
     ├── assets/                   # G1 + Inspire hand URDF + meshes
-    ├── objects/                  # household object configs + USD/OBJ + surface.npy
+    ├── objects/                  # per object: config.yaml + USD/OBJ + surface.npy + sdf_128.npz
+    │                             # geometry/bps_128.npy — the shared BPS basis
     ├── robots/g1_inspire.py      # G1 + Inspire hand articulation cfg
     └── tasks/hoi/
         ├── __init__.py           # gym.register with _make_env factory
@@ -80,7 +75,7 @@ g1_hoi_learning/
 
 2. Clone the repository
   ```bash
-    git clone https://github.com/xingchen1203/g1_hoi_learning.git
+    git clone https://github.com/xiaohu-art/g1_hoi_learning.git
     cd g1_hoi_learning
   ```
 
@@ -98,7 +93,7 @@ g1_hoi_learning/
 
 ## 🚀 Training
 
-Training uses a **Hydra YAML config** (`configs/track/train.yaml`) that overrides the registered base task. Edit the YAML to change motion files, num_envs, reward weights, network size, etc. The default config trains across all 11 objects in `data/train/`.
+Training uses a **Hydra YAML config** (`configs/track/train.yaml`) that overrides the registered base task. Edit the YAML to change motion files, num_envs, reward weights, network size, etc. The default config trains across all 9 objects in `data/train/`.
 
 ### Default usage
 

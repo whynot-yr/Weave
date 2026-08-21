@@ -33,6 +33,8 @@ class SimBaActorCriticCfg(RslRlPpoActorCriticCfg):
     critic_num_blocks: int = 2
     expansion: int = 4
 
+    compile: bool = True
+
     latent_dim: int = 128
     encoder_hidden_dims: dict[str, Any] = {
         "ref_motion_body": {"type": "mlp", "hidden_dims": [512, 256]},

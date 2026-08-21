@@ -18,3 +18,7 @@ env:
       eval_mode: true
       rsi: false
       debug_vis: false
+
+agent:
+  policy:
+    compile: false     # exporters need .to("cpu"); a compiled forward breaks it
