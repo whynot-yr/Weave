@@ -293,6 +293,23 @@ class EventCfg:
         },
     )
 
+    push_robot = EventTerm(
+      func=mdp.push_by_setting_velocity,
+      mode="interval",
+      interval_range_s=(2.0, 4.0),
+      params={
+          "asset_cfg": SceneEntityCfg("robot"),
+          "velocity_range": {
+              "x": (-0.15, 0.15),
+              "y": (-0.15, 0.15),
+              "z": (-0.05, 0.05),
+              "roll": (-0.15, 0.15),
+              "pitch": (-0.15, 0.15),
+              "yaw": (-0.20, 0.20),
+          },
+      },
+  )
+
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
