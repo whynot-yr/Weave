@@ -97,7 +97,7 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     feet_contact_sensor = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*_ankle_roll_link",
         history_length=3,
-        track_air_time=False,
+        track_air_time=True,
     )
 
 
@@ -376,6 +376,15 @@ class RewardsCfg:
         params={
             "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link"),
+        },
+    )
+    feet_air_time = RewTerm(
+        func=mdp.feet_air_time,
+        weight=0.5,
+        params={
+            "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
+            "threshold": 0.25,
+            "max_air_time": 0.5,
         },
     )
     joint_limit = RewTerm(

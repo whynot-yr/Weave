@@ -54,6 +54,7 @@ env:
         sensor_name: contact_sensor
         hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
         saturate_force: 5.0
+    feet_air_time:         { weight: 0.5 }
     feet_slide:           { weight: -1.0 }
     action_rate_l2:       { weight: -0.1 }
     joint_limit:          { weight: -10.0 }

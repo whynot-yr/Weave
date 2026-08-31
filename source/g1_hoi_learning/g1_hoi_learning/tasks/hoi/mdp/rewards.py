@@ -249,7 +249,22 @@ class hand_opposition_reward(ManagerTermBase):
         return (opposition.mean(-1) * gate).sum(-1) / gate.sum(-1).clamp(min=1.0)      # (N,)
 
 
-# -- Feet slip penalty --
+# -- Feet contact rewards --
+def feet_air_time(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float,
+    max_air_time: float,
+) -> torch.Tensor:
+    """Encourage enough feet air time.
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
+    last_air_time = contact_sensor.data.last_air_time[:, sensor_cfg.body_ids]
+    credited_air_time = last_air_time.clamp(max=max_air_time) - threshold
+    return (credited_air_time.clamp(min=0.0) * first_contact).sum(dim=1)
+
+
 def feet_slide(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg,
