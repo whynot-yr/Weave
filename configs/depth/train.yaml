@@ -12,12 +12,12 @@ defaults:
 
 env:
   scene:
-    num_envs: 1024
+    num_envs: 4096
 
   commands:
     motion:
       motion_files:
-        - ./data/train/smalltable_279clip.npz
+        - ./data/test_prepend/smalltable_42clip_var5.npz
       rsi: true
 
   # ---- reward weights & params ----
@@ -28,12 +28,12 @@ env:
     motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
     object_pos:           { weight: 2.0, params: { command_name: motion, std: 0.2 } }
     object_ori:           { weight: 2.0, params: { command_name: motion, std: 0.3 } }
-    hand_obj_rel_pos:
+    hand_opposition:
       weight: 2.0
       params:
         command_name: motion
-        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
-        std: 0.1
+        thumb_body_name: thumb_distal
+        finger_body_names: [index_intermediate, middle_intermediate, ring_intermediate, pinky_intermediate]
     contact:
       weight: 2.0
       params:
@@ -49,7 +49,7 @@ env:
   terminations:
     anchor_pos:    { params: { command_name: motion, threshold: 0.25 } }
     anchor_ori:    { params: { command_name: motion, threshold: 0.8  } }
-    object_pos:    { params: { command_name: motion, threshold: 0.25 } }
+    object_pos:    { params: { command_name: motion, threshold: 0.3 } }
     object_ori:    { params: { command_name: motion, threshold: 0.3  } }
     ee_body_pos:
       params:
@@ -75,32 +75,31 @@ agent:
   experiment_name: g1_inspire_hoi_depth
   num_steps_per_env: 32
   max_iterations: 100000
-  save_interval: 200
+  save_interval: 100
 
   policy:
-    init_noise_std: 0.5
-    actor_hidden_dim: 1024
-    critic_hidden_dim: 1024
-    teacher_hidden_dim: 1024
+    init_noise_std: 0.2
+    actor_hidden_dim: 512
+    critic_hidden_dim: 512
+    teacher_hidden_dim: 512
     actor_num_blocks: 1
     critic_num_blocks: 2
     teacher_num_blocks: 1
     expansion: 4
     latent_dim: 128
     encoder_hidden_dims:
-      ref_motion_body: { type: mlp, hidden_dims: [512, 256] }
+      ref_motion_body: { type: mlp, hidden_dims: [256] }
       ref_motion_object: { type: mlp, hidden_dims: [256] }
       object_state: { type: mlp, hidden_dims: [256] }
       robot_proprio: { type: mlp, hidden_dims: [256] }
       robot_privileged: { type: mlp, hidden_dims: [256] }
-      depth: { type: conv, in_ch: 128, hw: [32, 32], channels: [128, 64, 32] }
+      depth: { type: conv, in_ch: 1, hw: [72, 128], channels: [16, 32, 64, 64, 64] }
     actor_obs_normalization: true
     critic_obs_normalization: true
     teacher_obs_normalization: true
 
   algorithm:
-    bc_coef: 0.3
-    bc_coef_min: 0.05
+    bc_coef: 1.0
     bc_coef_anneal_iters: 6000
     learning_rate: 1.0e-4
     schedule: adaptive

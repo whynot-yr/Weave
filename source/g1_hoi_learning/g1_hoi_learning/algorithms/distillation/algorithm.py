@@ -16,8 +16,7 @@ class MuonPPODistill(MuonPPO):
     def __init__(
         self,
         policy,
-        bc_coef: float = 0.3,
-        bc_coef_min: float = 0.05,
+        bc_coef: float = 1.0,
         bc_coef_anneal_iters: int = 6000,
         weight_decay: float = 0.01,
         **kwargs: Any,
@@ -25,7 +24,6 @@ class MuonPPODistill(MuonPPO):
         super().__init__(policy, weight_decay=weight_decay, **kwargs)  # Muon over actor+critic (teacher skipped)
         self.bc_coef_init = bc_coef
         self.bc_coef = bc_coef
-        self.bc_coef_min = bc_coef_min
         self.bc_coef_anneal_iters = bc_coef_anneal_iters
         self._it = 0
 
@@ -147,12 +145,12 @@ class MuonPPODistill(MuonPPO):
             else:
                 value_loss = (returns_batch - value_batch).pow(2).mean()
 
-            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+            rl_loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
 
             # ----- teacher-BC (distillation): mean-only MSE to the frozen teacher -----
             a_teacher = self.policy.teacher_act(obs_batch)[:original_batch_size]  # detached in teacher_act
             bc_loss = torch.nn.functional.mse_loss(mu_batch, a_teacher)
-            loss = loss + self.bc_coef * bc_loss
+            loss = self.bc_coef * bc_loss + (1.0 - self.bc_coef) * rl_loss
             mean_bc_loss += bc_loss.item()
 
             # Symmetry loss
@@ -181,7 +179,7 @@ class MuonPPODistill(MuonPPO):
                 )
                 # Add the loss to the total loss
                 if self.symmetry["use_mirror_loss"]:
-                    loss += self.symmetry["mirror_loss_coeff"] * symmetry_loss
+                    loss += (1.0 - self.bc_coef) * self.symmetry["mirror_loss_coeff"] * symmetry_loss
                 else:
                     symmetry_loss = symmetry_loss.detach()
 
@@ -241,10 +239,11 @@ class MuonPPODistill(MuonPPO):
 
         self._it += 1
         if self._it < self.bc_coef_anneal_iters:
-            cos = 0.5 * (1.0 + math.cos(math.pi * self._it / self.bc_coef_anneal_iters))
-            self.bc_coef = self.bc_coef_min + (self.bc_coef_init - self.bc_coef_min) * cos
+            self.bc_coef = self.bc_coef_init * 0.5 * (
+                1.0 + math.cos(math.pi * self._it / self.bc_coef_anneal_iters)
+            )
         else:
-            self.bc_coef = self.bc_coef_min
+            self.bc_coef = 0.0
 
         # Clear the storage
         self.storage.clear()

@@ -31,8 +31,8 @@ class DepthSceneCfg(G1HoiLearningSceneCfg):
         depth_clipping_behavior="max",
         max_distance=3.0,
         pattern_cfg=PinholeCameraPatternCfg(
-            width=192,
-            height=108,
+            width=128,
+            height=72,
             focal_length=1.0,  # focal=1 => aperture = 2*tan(FOV/2)
             horizontal_aperture=2 * math.tan(math.radians(86.0) / 2),  # FOV_h 86 deg
             vertical_aperture=2 * math.tan(math.radians(57.0) / 2),  # FOV_v 57 deg
@@ -60,7 +60,6 @@ class DepthObservationsCfg(ObservationsCfg):
                 "min_z": 0.25,
                 "noise_k_range": (0.005, 0.015),
                 "dropout_prob": 0.05,
-                "defm_size": 512,
                 "debug_vis": False,
             },
         )
