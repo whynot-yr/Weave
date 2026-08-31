@@ -199,11 +199,6 @@ class MotionCommand(CommandTerm):
         self._eval_clip_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.future_offsets = torch.tensor(cfg.future_offsets, dtype=torch.long, device=self.device)
 
-        # Episode-constant odometry bias used only by noisy actor observations.
-        self.odom_pos_error_b = torch.zeros(self.num_envs, 3, device=self.device)
-        self.odom_quat_error = torch.zeros(self.num_envs, 4, device=self.device)
-        self.odom_quat_error[:, 0] = 1.0
-
         # clip-wise evaluation
         if self.cfg.eval_mode:
             if self.motion.num_objects != 1:

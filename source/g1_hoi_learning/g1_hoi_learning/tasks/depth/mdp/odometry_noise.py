@@ -1,19 +1,13 @@
-"""Episode-constant odometry noise for actor observations."""
+"""Episode-constant odometry noise used only by the depth student."""
 
 from collections.abc import Sequence
 
 import torch
 
 from isaaclab.envs import ManagerBasedEnv
-from isaaclab.utils.math import (
-    matrix_from_quat,
-    quat_apply,
-    quat_from_euler_xyz,
-    quat_mul,
-    subtract_frame_transforms,
-)
+from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_from_euler_xyz, quat_mul, subtract_frame_transforms
 
-from .commands import MotionCommand
+from .commands import DepthMotionCommand
 
 
 def randomize_actor_odometry_bias(
@@ -24,7 +18,7 @@ def randomize_actor_odometry_bias(
     odom_rot_range: tuple[float, float, float],
 ) -> None:
     """Sample an episode-constant uniform odometry pose bias."""
-    command: MotionCommand = env.command_manager.get_term(command_name)
+    command: DepthMotionCommand = env.command_manager.get_term(command_name)
     if env_ids is None:
         env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.long)
     elif not isinstance(env_ids, torch.Tensor):
@@ -46,7 +40,7 @@ def randomize_actor_odometry_bias(
     )
 
 
-def estimated_anchor_pose_w(command: MotionCommand) -> tuple[torch.Tensor, torch.Tensor]:
+def estimated_anchor_pose_w(command: DepthMotionCommand) -> tuple[torch.Tensor, torch.Tensor]:
     """Return the live robot anchor pose perturbed by the sampled odometry bias."""
     anchor_pos_w = command.robot_anchor_pos_w + quat_apply(command.robot_anchor_quat_w, command.odom_pos_error_b)
     anchor_quat_w = quat_mul(command.robot_anchor_quat_w, command.odom_quat_error)
@@ -54,7 +48,7 @@ def estimated_anchor_pose_w(command: MotionCommand) -> tuple[torch.Tensor, torch
 
 
 def future_pose_in_estimated_frame(
-    command: MotionCommand, target_pos_w: torch.Tensor, target_quat_w: torch.Tensor
+    command: DepthMotionCommand, target_pos_w: torch.Tensor, target_quat_w: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Express a future target pose in the noisy odometry frame."""
     num_offsets = len(command.cfg.future_offsets)
@@ -68,7 +62,7 @@ def future_pose_in_estimated_frame(
 
 
 def motion_future_anchor_pos_noisy_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    command: MotionCommand = env.command_manager.get_term(command_name)
+    command: DepthMotionCommand = env.command_manager.get_term(command_name)
     anchor_pos_b = future_pose_in_estimated_frame(
         command, command.future_anchor_pos_w, command.future_anchor_quat_w
     )[0]
@@ -76,7 +70,7 @@ def motion_future_anchor_pos_noisy_b(env: ManagerBasedEnv, command_name: str) ->
 
 
 def motion_future_anchor_ori_noisy_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    command: MotionCommand = env.command_manager.get_term(command_name)
+    command: DepthMotionCommand = env.command_manager.get_term(command_name)
     anchor_quat_b = future_pose_in_estimated_frame(
         command, command.future_anchor_pos_w, command.future_anchor_quat_w
     )[1]
@@ -84,7 +78,7 @@ def motion_future_anchor_ori_noisy_b(env: ManagerBasedEnv, command_name: str) ->
 
 
 def motion_future_obj_pos_noisy_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    command: MotionCommand = env.command_manager.get_term(command_name)
+    command: DepthMotionCommand = env.command_manager.get_term(command_name)
     object_pos_b = future_pose_in_estimated_frame(
         command, command.future_obj_pos_w, command.future_obj_quat_w
     )[0]
@@ -92,7 +86,7 @@ def motion_future_obj_pos_noisy_b(env: ManagerBasedEnv, command_name: str) -> to
 
 
 def motion_future_obj_ori_noisy_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    command: MotionCommand = env.command_manager.get_term(command_name)
+    command: DepthMotionCommand = env.command_manager.get_term(command_name)
     object_quat_b = future_pose_in_estimated_frame(
         command, command.future_obj_pos_w, command.future_obj_quat_w
     )[1]

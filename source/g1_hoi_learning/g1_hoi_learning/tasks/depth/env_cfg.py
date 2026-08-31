@@ -8,9 +8,10 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.sensors.ray_caster.patterns import PinholeCameraPatternCfg
 from isaaclab.utils import configclass
 
-from g1_hoi_learning.tasks.hoi.env_cfg import EventCfg, G1HoiLearningEnvCfg, G1HoiLearningSceneCfg, ObservationsCfg
+from g1_hoi_learning.tasks.hoi.env_cfg import CommandsCfg, EventCfg, G1HoiLearningEnvCfg, G1HoiLearningSceneCfg, ObservationsCfg
 
 from . import mdp
+from .mdp.commands import DepthMotionCommandCfg
 from .mdp.depth_camera import ArticulationRayCasterCameraCfg, ArticulationTargetCfg, RaycastTargetCfg
 
 
@@ -50,8 +51,38 @@ class DepthSceneCfg(G1HoiLearningSceneCfg):
 class DepthObservationsCfg(ObservationsCfg):
     """Raycast depth observation group."""
 
-    noisy_ref_motion_body: ObservationsCfg.NoisyRefMotionBodyCfg = ObservationsCfg.NoisyRefMotionBodyCfg()
-    noisy_ref_motion_object: ObservationsCfg.NoisyRefMotionObjectCfg = ObservationsCfg.NoisyRefMotionObjectCfg()
+    @configclass
+    class NoisyRefMotionBodyCfg(ObsGroup):
+        """Future robot reference expressed in the student's noisy odometry frame."""
+
+        motion_future_joint_pos = ObsTerm(func=mdp.motion_future_joint_pos, params={"command_name": "motion"})
+        motion_future_anchor_pos_b = ObsTerm(
+            func=mdp.motion_future_anchor_pos_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_anchor_ori_b = ObsTerm(
+            func=mdp.motion_future_anchor_ori_noisy_b, params={"command_name": "motion"}
+        )
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class NoisyRefMotionObjectCfg(ObsGroup):
+        """Future object reference expressed in the student's noisy odometry frame."""
+
+        motion_future_obj_pos_b = ObsTerm(
+            func=mdp.motion_future_obj_pos_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_obj_ori_b = ObsTerm(
+            func=mdp.motion_future_obj_ori_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_contact_label = ObsTerm(func=mdp.motion_future_contact_label, params={"command_name": "motion"})
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    noisy_ref_motion_body: NoisyRefMotionBodyCfg = NoisyRefMotionBodyCfg()
+    noisy_ref_motion_object: NoisyRefMotionObjectCfg = NoisyRefMotionObjectCfg()
 
     @configclass
     class DepthCfg(ObsGroup):
@@ -109,8 +140,20 @@ class DepthEventsCfg(EventCfg):
 
 
 @configclass
+class DepthCommandsCfg(CommandsCfg):
+    """Depth task command configuration with odometry-bias state."""
+
+    motion: DepthMotionCommandCfg = DepthMotionCommandCfg(
+        resampling_time_range=(1.0e9, 1.0e9),
+        debug_vis=False,
+        rsi=True,
+    )
+
+
+@configclass
 class G1HoiDepthEnvCfg(G1HoiLearningEnvCfg):
     scene: DepthSceneCfg = DepthSceneCfg(num_envs=4096, env_spacing=4.0)
+    commands: DepthCommandsCfg = DepthCommandsCfg()
     observations: DepthObservationsCfg = DepthObservationsCfg()
     events: DepthEventsCfg = DepthEventsCfg()
 

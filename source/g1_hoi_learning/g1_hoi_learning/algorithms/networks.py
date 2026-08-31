@@ -179,8 +179,9 @@ class ConvEncoder(nn.Module):
         self.proj = nn.Sequential(nn.Linear(flat, latent_dim), nn.SiLU())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.view(-1, self.in_ch, self.h, self.w)
-        return self.proj(self.conv(x).flatten(1))
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            y = self.proj(self.conv(x).flatten(1))
+        return y.float()
 
 
 ENCODERS = {"mlp": MLPEncoder, "conv": ConvEncoder}
