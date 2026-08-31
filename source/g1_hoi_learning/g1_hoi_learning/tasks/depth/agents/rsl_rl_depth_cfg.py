@@ -37,6 +37,8 @@ class ActorCriticTeacherCfg(RslRlPpoActorCriticCfg):
 
     latent_dim: int = 128
     encoder_hidden_dims: dict[str, Any] = {
+        "noisy_ref_motion_body": {"type": "mlp", "hidden_dims": [256]},
+        "noisy_ref_motion_object": {"type": "mlp", "hidden_dims": [256]},
         "ref_motion_body": {"type": "mlp", "hidden_dims": [256]},
         "ref_motion_object": {"type": "mlp", "hidden_dims": [256]},
         "object_state": {"type": "mlp", "hidden_dims": [256]},
@@ -76,7 +78,7 @@ class DepthRunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval: int = 100
 
     obs_groups: dict = {
-        "policy": ["ref_motion_body", "ref_motion_object", "depth", "robot_proprio"],
+        "policy": ["noisy_ref_motion_body", "noisy_ref_motion_object", "depth", "robot_proprio"],
         "critic": ["ref_motion_body", "ref_motion_object", "object_state", "robot_privileged"],
         "teacher": ["ref_motion_body", "ref_motion_object", "object_state", "robot_proprio"],
     }

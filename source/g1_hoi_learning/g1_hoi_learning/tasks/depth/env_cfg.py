@@ -50,6 +50,9 @@ class DepthSceneCfg(G1HoiLearningSceneCfg):
 class DepthObservationsCfg(ObservationsCfg):
     """Raycast depth observation group."""
 
+    noisy_ref_motion_body: ObservationsCfg.NoisyRefMotionBodyCfg = ObservationsCfg.NoisyRefMotionBodyCfg()
+    noisy_ref_motion_object: ObservationsCfg.NoisyRefMotionObjectCfg = ObservationsCfg.NoisyRefMotionObjectCfg()
+
     @configclass
     class DepthCfg(ObsGroup):
         depth = ObsTerm(
@@ -73,6 +76,16 @@ class DepthObservationsCfg(ObservationsCfg):
 @configclass
 class DepthEventsCfg(EventCfg):
     """hoi events + per-reset domain randomization of the depth camera's extrinsics / intrinsics."""
+
+    randomize_actor_odometry_bias = EventTerm(
+        func=mdp.randomize_actor_odometry_bias,
+        mode="reset",
+        params={
+            "command_name": "motion",
+            "odom_pos_range": (0.05, 0.05, 0.015),
+            "odom_rot_range": (0.015, 0.015, 0.045),
+        },
+    )
 
     randomize_camera_extrinsics = EventTerm(
         func=mdp.randomize_camera_extrinsics,

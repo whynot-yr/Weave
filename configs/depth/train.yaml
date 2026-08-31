@@ -88,6 +88,8 @@ agent:
     expansion: 4
     latent_dim: 128
     encoder_hidden_dims:
+      noisy_ref_motion_body: { type: mlp, hidden_dims: [256] }
+      noisy_ref_motion_object: { type: mlp, hidden_dims: [256] }
       ref_motion_body: { type: mlp, hidden_dims: [256] }
       ref_motion_object: { type: mlp, hidden_dims: [256] }
       object_state: { type: mlp, hidden_dims: [256] }

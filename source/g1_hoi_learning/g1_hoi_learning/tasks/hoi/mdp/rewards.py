@@ -254,15 +254,13 @@ def feet_air_time(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg,
     threshold: float,
-    max_air_time: float,
 ) -> torch.Tensor:
-    """Encourage enough feet air time.
-    """
+    """Reward a completed swing once its air time reaches the target threshold."""
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
     last_air_time = contact_sensor.data.last_air_time[:, sensor_cfg.body_ids]
-    credited_air_time = last_air_time.clamp(max=max_air_time) - threshold
-    return (credited_air_time.clamp(min=0.0) * first_contact).sum(dim=1)
+    reached_threshold = (last_air_time >= threshold).float() * threshold
+    return (reached_threshold * first_contact).sum(dim=1)
 
 
 def feet_slide(

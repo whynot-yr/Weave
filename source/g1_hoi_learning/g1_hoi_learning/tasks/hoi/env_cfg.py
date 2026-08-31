@@ -173,6 +173,36 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     @configclass
+    class NoisyRefMotionBodyCfg(ObsGroup):
+        """Future robot reference expressed in the actor's noisy odometry frame."""
+
+        motion_future_joint_pos = ObsTerm(func=mdp.motion_future_joint_pos, params={"command_name": "motion"})
+        motion_future_anchor_pos_b = ObsTerm(
+            func=mdp.motion_future_anchor_pos_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_anchor_ori_b = ObsTerm(
+            func=mdp.motion_future_anchor_ori_noisy_b, params={"command_name": "motion"}
+        )
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class NoisyRefMotionObjectCfg(ObsGroup):
+        """Future object reference expressed in the same noisy odometry frame."""
+
+        motion_future_obj_pos_b = ObsTerm(
+            func=mdp.motion_future_obj_pos_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_obj_ori_b = ObsTerm(
+            func=mdp.motion_future_obj_ori_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_contact_label = ObsTerm(func=mdp.motion_future_contact_label, params={"command_name": "motion"})
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
     class ObjectStateCfg(ObsGroup):
         """Live object pose/shape, robot-object relational features, and live contact."""
 
@@ -376,6 +406,7 @@ class RewardsCfg:
         params={
             "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll_link"),
+            "force_threshold": 0.5,
         },
     )
     feet_air_time = RewTerm(
@@ -384,7 +415,6 @@ class RewardsCfg:
         params={
             "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
             "threshold": 0.25,
-            "max_air_time": 0.5,
         },
     )
     joint_limit = RewTerm(
