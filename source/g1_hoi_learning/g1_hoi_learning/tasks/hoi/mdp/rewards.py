@@ -259,7 +259,7 @@ def feet_air_time(
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
     last_air_time = contact_sensor.data.last_air_time[:, sensor_cfg.body_ids]
-    reached_threshold = (last_air_time >= threshold).float() * threshold
+    reached_threshold = (last_air_time >= threshold).float()
     return (reached_threshold * first_contact).sum(dim=1)
 
 

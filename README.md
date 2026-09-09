@@ -77,6 +77,7 @@ g1_hoi_learning/
   ```bash
     git clone https://github.com/xiaohu-art/g1_hoi_learning.git
     cd g1_hoi_learning
+    git lfs install && git lfs pull
   ```
 
 3. Installation

@@ -159,32 +159,7 @@ class MLPEncoder(nn.Sequential):
         super().__init__(*layers)
 
 
-class ConvEncoder(nn.Module):
-    """Flat (C*H*W) feature map -> conv stack -> latent_dim."""
-
-    def __init__(self, in_dim: int, latent_dim: int, in_ch: int, hw: list[int],
-                 channels: list[int] = (64, 64)) -> None:
-        super().__init__()
-        self.in_ch, self.h, self.w = in_ch, hw[0], hw[1]
-        if in_ch * self.h * self.w != in_dim:
-            raise ValueError(f"ConvEncoder: in_ch*H*W ({in_ch * self.h * self.w}) != group_dim ({in_dim}).")
-        layers: list[nn.Module] = []
-        c = in_ch
-        for oc in channels:
-            layers += [nn.Conv2d(c, oc, 3, stride=2, padding=1), nn.SiLU()]
-            c = oc
-        self.conv = nn.Sequential(*layers)
-        with torch.no_grad():
-            flat = self.conv(torch.zeros(1, in_ch, self.h, self.w)).flatten(1).shape[1]
-        self.proj = nn.Sequential(nn.Linear(flat, latent_dim), nn.SiLU())
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            y = self.proj(self.conv(x).flatten(1))
-        return y.float()
-
-
-ENCODERS = {"mlp": MLPEncoder, "conv": ConvEncoder}
+ENCODERS = {"mlp": MLPEncoder}
 
 
 class GroupEncoder(nn.Module):
@@ -203,7 +178,7 @@ class GroupEncoder(nn.Module):
             spec = dict(spec)
             self.encoders.append(ENCODERS[spec.pop("type")](group_dim, latent_dim, **spec))
         for m in self.modules():
-            if isinstance(m, (nn.Linear, nn.Conv2d)):
+            if isinstance(m, nn.Linear):
                 nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
                 nn.init.zeros_(m.bias)
 

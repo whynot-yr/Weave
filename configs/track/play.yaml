@@ -21,15 +21,15 @@ env:
   commands:
     motion:
       motion_files:
-        # - ./data/test_prepend/clothesstand_29clip_var5.npz
-        # - ./data/test_prepend/floorlamp_33clip_var5.npz
-        # - ./data/test_prepend/largebox_46clip_var5.npz
-        # - ./data/test_prepend/largetable_36clip_var5.npz
-        # - ./data/test_prepend/smallbox_24clip_var5.npz
-        # - ./data/test_prepend/smalltable_42clip_var5.npz
-        # - ./data/test_prepend/tripod_30clip_var5.npz
-        - ./data/test_prepend/whitechair_35clip_var5.npz
-        # - ./data/test_prepend/woodchair_46clip_var5.npz
+        # - ./data/test/clothesstand_29clip_var5.npz
+        # - ./data/test/floorlamp_33clip_var5.npz
+        # - ./data/test/largebox_46clip_var5.npz
+        # - ./data/test/largetable_36clip_var5.npz
+        # - ./data/test/smallbox_24clip_var5.npz
+        # - ./data/test/smalltable_42clip_var5.npz
+        # - ./data/test/tripod_30clip_var5.npz
+        - ./data/test/whitechair_35clip_var5.npz
+        # - ./data/test/woodchair_46clip_var5.npz
       rsi: false
 
 agent:

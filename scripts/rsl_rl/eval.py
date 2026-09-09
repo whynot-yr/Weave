@@ -54,7 +54,7 @@ import time
 import gymnasium as gym
 import torch
 import numpy as np
-from rsl_rl.runners import DistillationRunner, OnPolicyRunner
+from rsl_rl.runners import OnPolicyRunner
 from tqdm import tqdm
 
 from isaaclab.envs import DirectMARLEnv, DirectMARLEnvCfg, DirectRLEnvCfg, ManagerBasedRLEnvCfg, multi_agent_to_single_agent
@@ -216,12 +216,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    else:
+    if agent_cfg.class_name != "OnPolicyRunner":
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(resume_path)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
     policy_nn = runner.alg.policy if hasattr(runner.alg, "policy") else runner.alg.actor_critic

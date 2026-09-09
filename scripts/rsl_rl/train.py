@@ -84,7 +84,7 @@ from datetime import datetime
 
 import gymnasium as gym
 import torch
-from rsl_rl.runners import DistillationRunner, OnPolicyRunner
+from rsl_rl.runners import OnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -176,9 +176,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env = multi_agent_to_single_agent(env)
 
     # save resume path before creating a new log_dir
-    if agent_cfg.resume or agent_cfg.algorithm.class_name in ("Distillation", "MuonDistillation", "MuonPPODistill"):
-        # allow --load_run to be a direct path to a run dir (e.g. a teacher from another experiment,
-        # as used for distillation); otherwise treat it as a run-name regex within this experiment.
+    if agent_cfg.resume:
+        # Allow --load_run to be a direct path to a run dir; otherwise treat it as a
+        # run-name regex within this experiment.
         load_run_abs = os.path.abspath(agent_cfg.load_run)
         if os.path.isdir(load_run_abs):
             resume_path = get_checkpoint_path(
@@ -205,16 +205,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # create runner from rsl-rl
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    else:
+    if agent_cfg.class_name != "OnPolicyRunner":
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
-    if agent_cfg.resume or agent_cfg.algorithm.class_name in ("Distillation", "MuonDistillation", "MuonPPODistill"):
+    if agent_cfg.resume:
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)

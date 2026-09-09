@@ -384,7 +384,7 @@ class RewardsCfg:
         weight=0.5,
         params={
             "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
-            "threshold": 0.25,
+            "threshold": 0.3,
         },
     )
     joint_limit = RewTerm(
