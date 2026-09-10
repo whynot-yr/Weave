@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="152" viewBox="0 0 1200 152"
+     role="img" aria-labelledby="title">
+  <title id="title">WEAVE: Learning Whole-Body Dexterous Loco-Manipulation from Human–Object Interactions</title>
+  <g fill="#487bbc" text-anchor="middle">
+    <text x="600" y="66" font-family="Georgia, 'Times New Roman', serif" font-size="72"
+          font-variant="small-caps" letter-spacing="1.5">Weave</text>
+    <text x="600" y="124" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600"
+          >Learning Whole-Body Dexterous Loco-Manipulation from Human–Object Interactions</text>
+  </g>
+</svg>

@@ -35,7 +35,7 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.GroundPlaneCfg(
-            usd_path=GROUND_PLANE_USD_PATH,
+            # usd_path=GROUND_PLANE_USD_PATH,
             size=(100.0, 100.0),
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 static_friction=1.0,
