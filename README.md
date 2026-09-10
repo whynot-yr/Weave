@@ -3,8 +3,6 @@
        alt="WEAVE: Learning Whole-Body Dexterous Loco-Manipulation from Human–Object Interactions" />
 </h1>
 
----
-
 ## 🔧 Installation
 
 1. Create a workspace directory — everything (Isaac Sim, IsaacLab, the venv, this repo) is installed side by side inside it, so pick a disk with **~30 GB** free:
