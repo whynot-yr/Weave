@@ -1,7 +1,7 @@
-<h1 align="center">
-  <img src="assets/weave_wordmark.svg" width="1000"
+<p align="center">
+  <img src="assets/svg.png" width="100%"
        alt="WEAVE: Learning Whole-Body Dexterous Loco-Manipulation from Human–Object Interactions" />
-</h1>
+</p>
 
 ## 🔧 Installation
 
