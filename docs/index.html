@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WEAVE: Learning Whole-Body Dexterous Loco-Manipulation from Human–Object Interactions</title>
+  <!-- Favicon: one letter on a dark rounded square.
+       The letter matches the project's initial. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23222'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' font-family='Helvetica,Arial,sans-serif' font-size='38' font-weight='700' fill='%23fff'%3EW%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css?v=q3-magnifier-1">
+  <script type="importmap">{"imports":{"three":"./demo/vendor/three/build/three.module.js","three/addons/":"./demo/vendor/three/examples/jsm/"}}</script>
+</head>
+<body>
+
+  <!-- ==================== Table of contents ====================
+       One <li> per section; each href must match the id of a .tagline below.
+       Hidden automatically on screens narrower than 1400px. -->
+  <div class="toc">
+    <h3>Content</h3>
+    <hr>
+    <ul>
+      <li><a href="#interactive-demo">Interactive Demo</a></li>
+      <li><a href="#abstract">Abstract</a></li>
+      <li><a href="#method">Method</a></li>
+      <li><a href="#experiments">Experiments</a></li>
+      <li class="toc-subsection"><a href="#experiment-one">Loco-Manipulation</a></li>
+      <li class="toc-subsection"><a href="#experiment-two">Multi-Object Learning</a></li>
+      <li class="toc-subsection"><a href="#experiment-three">Ablations</a></li>
+      <li><a href="#failure-cases">Failure Cases</a></li>
+    </ul>
+  </div>
+
+  <div class="main-content">
+
+    <!-- ==================== Header ==================== -->
+    <div class="hero-text">WEAVE</div>
+    <div class="sub-hero-text">Learning Whole-Body Dexterous Loco-Manipulation from Human–Object Interactions</div>
+
+    <div class="authors">
+      <a href="https://xiaohu-art.github.io/" target="_blank" rel="noopener noreferrer">Liu Cao</a><sup>1,5,6</sup>,
+      <a href="https://xingzewu24.github.io/" target="_blank" rel="noopener noreferrer">Xingze Wu</a><sup>3,6</sup>,
+      Jingzhi Cui<sup>1,5</sup>,
+      <a href="https://btx0424.github.io/" target="_blank" rel="noopener noreferrer">Botian Xu</a><sup>4</sup>,
+      Mingzhi Pei<sup>2,5</sup>,
+      <a href="https://gcfy63821.github.io/" target="_blank" rel="noopener noreferrer">Ruoqu Chen</a><sup>1,5,6</sup>,
+      <a href="https://www.mengdixu.me/" target="_blank" rel="noopener noreferrer">Mengdi Xu</a><sup>1,5,6</sup>
+      <span class="affiliation-row">
+        <span class="affiliation"><sup>1</sup>Tsinghua IIIS</span>
+        <span class="affiliation"><sup>2</sup>Tsinghua College AI</span>
+        <span class="affiliation"><sup>3</sup>Dalian University of Technology</span>
+      </span>
+      <span class="affiliation-row">
+        <span class="affiliation"><sup>4</sup>The Chinese University of Hong Kong</span>
+        <span class="affiliation"><sup>5</sup>Shanghai Qi Zhi Institute</span>
+        <span class="affiliation"><sup>6</sup>CocoMatrix</span>
+      </span>
+    </div>
+
+    <div class="quick-links">
+      <a href="./Weave.pdf" target="_blank">[pdf]</a>
+      <a href="https://github.com/xiaohu-art/Weave" target="_blank" rel="noopener noreferrer">[code]</a>
+      <!-- <a href="https://arxiv.org/abs/XXXX.XXXXX" target="_blank">[arxiv]</a> -->
+      <!-- <span class="coming-soon">[arxiv] (coming soon)</span> -->
+    </div>
+
+    <!-- ==================== Interactive motion replay ==================== -->
+    <div class="tagline" id="interactive-demo">Interactive Demo</div>
+    <iframe class="policy-demo-frame" src="./demo/index.html?v=20260911-root-joints" title="Interactive G1 recorded motion replay" loading="eager" allow="fullscreen"></iframe>
+
+    <!-- ==================== Text section ==================== -->
+    <div class="tagline" id="abstract">Abstract</div>
+
+    <div class="section">
+      Learning humanoid–object interaction requires coordinating whole-body balance, locomotion, and dexterous hand
+      contact to control both robot and object motion. Human demonstrations provide examples of coordinated
+      interaction, but transferring these behaviors to humanoid robots requires learning how to establish and
+      maintain effective contact forces under different embodiments and dynamics. We present
+      <span style="font-variant: small-caps;">Weave</span>, a unified framework for learning whole-body dexterous
+      humanoid–object interaction from captured human demonstrations.
+      <span style="font-variant: small-caps;">Weave</span> first converts captured human–object interactions into
+      executable robot–object references through <em>contact-aware retargeting</em> and
+      <em>approach-motion completion</em>. At its core is a <b><em>contact- and geometry-aware policy</em></b> that
+      jointly controls the humanoid body and articulated fingers across multiple objects and interaction sequences.
+      Evaluation across nine objects yields a <b>92.5%</b> success rate on trained interactions and, without any
+      additional training, <b>65.0%</b> on sequences never seen during training. We additionally release
+      <b>~23 hours</b> of physically executed rollouts, providing robot–object trajectories with contact annotation
+      for downstream interaction-policy learning and physically consistent HOI motion generation.
+    </div>
+
+    <!-- ==================== Section with a full-width figure ==================== -->
+    <div class="tagline" id="method">Method</div>
+
+    <div class="section">
+      <span style="font-variant: small-caps;">Weave</span> turns captured human–object interactions into
+      whole-body dexterous loco-manipulation skills in two stages: each demonstration is first converted into an
+      executable robot–object reference, then a single policy learns to track these references in simulation.
+      The four panels below follow one sequence through this pipeline.
+      <ul>
+        <li>
+          <b>SMPLX Sequences.</b> Each captured demonstration pairs an SMPL-X body motion with the trajectory of the
+          object it manipulates: the grasp and transport the humanoid should reproduce.
+        </li>
+        <li>
+          <b>Whole Body Retarget.</b> Whole-body inverse kinematics aligns selected robot links with their SMPL-X
+          counterparts, constraining the pelvis in the horizontal plane and setting its height from ground contact.
+          Since IK captures the gross arm motion but not a stable grasp, a <em>contact-aware hand refinement</em>
+          pulls labeled fingertips onto the object surface, maximizes a force-closure objective, and penalizes
+          penetration.
+        </li>
+        <li>
+          <b>Kimodo Completion.</b> The retargeted interaction begins beside the object, so Kimodo synthesizes a
+          locomotion prefix that ends at the initial interaction pose; sampling different approach directions yields
+          several complete references from one clip. Each robot link is then labeled as in contact, neutral, or
+          separated by its distance to the object surface.
+        </li>
+        <li>
+          <b>Policy Rollout.</b> A unified <b><em>contact- and geometry-aware policy</em></b> is trained with PPO to
+          track these references jointly across all objects and clips. From proprioception, object pose and geometry
+          features, and a short-horizon reference command, it outputs joint-position targets for the body and the
+          proximal finger joints. Rewards combine robot and object tracking with <em>hand-opposition</em> and
+          <em>contact-matching</em> terms; reference state initialization and early termination keep rollouts close
+          to the reference.
+        </li>
+      </ul>
+    </div>
+
+    <figure class="method-pipeline" id="method-pipeline" aria-labelledby="pipeline-caption">
+      <div class="pipeline-stages">
+        <div class="pipeline-stage" data-stage="smplx">
+          <div class="pipeline-stage-header">
+            <span class="pipeline-stage-title">SMPLX Sequences</span>
+            <div class="pipeline-progress" aria-hidden="true"><span></span></div>
+          </div>
+          <div class="pipeline-viewport" role="img" aria-label="SMPL-X human and object motion"></div>
+        </div>
+        <div class="pipeline-stage" data-stage="retarget">
+          <div class="pipeline-stage-header">
+            <span class="pipeline-stage-title">Whole Body Retarget</span>
+            <div class="pipeline-progress" aria-hidden="true"><span></span></div>
+          </div>
+          <div class="pipeline-viewport" role="img" aria-label="Motion retargeted to the G1 robot"></div>
+        </div>
+        <div class="pipeline-stage" data-stage="kimodo">
+          <div class="pipeline-stage-header">
+            <span class="pipeline-stage-title">Kimodo Completion</span>
+            <div class="pipeline-progress" aria-hidden="true"><span></span></div>
+          </div>
+          <div class="pipeline-viewport" role="img" aria-label="Five Kimodo motion variants playing together"></div>
+        </div>
+        <div class="pipeline-stage" data-stage="rollout">
+          <div class="pipeline-stage-header">
+            <span class="pipeline-stage-title">Policy Rollout</span>
+            <div class="pipeline-progress" aria-hidden="true"><span></span></div>
+          </div>
+          <div class="pipeline-viewport" role="img" aria-label="Recorded policy rollout of Kimodo v00"></div>
+        </div>
+      </div>
+      <p class="pipeline-status" role="status">Loading motion sequence…</p>
+      <figcaption class="figure-caption" id="pipeline-caption">
+        <b>From Human Motion to Robot Execution.</b>
+      </figcaption>
+      <noscript><p>Enable JavaScript to view the four-stage motion sequence.</p></noscript>
+    </figure>
+    <script type="module" src="./scripts/method-pipeline.mjs?v=20260911-rounded-canvas"></script>
+
+    <!-- ==================== Section with videos ==================== -->
+    <div class="tagline" id="experiments">Experiments</div>
+
+    <div class="section">
+      We instantiate <span style="font-variant: small-caps;">Weave</span> on a Unitree G1 humanoid with 29 actuated
+      body DoFs and two Inspire dexterous hands with 12 actuated finger DoFs. References are constructed from captured
+      interactions with nine everyday objects and divided into two disjoint splits: a <b>training split</b> of 7,869
+      trajectories (19.56 h) and a <b>test split</b> of 1,605 trajectories (3.67 h). We report success rate, progress
+      rate, and clip-balanced tracking errors for the pelvis, tracked bodies, joints, and object. The experiments
+      answer three questions:
+      <ul>
+        <li>
+          <b>Q1.</b> How effectively does the learned policy execute whole-body dexterous loco-manipulation across
+          objects and interaction sequences?
+        </li>
+        <li>
+          <b>Q2.</b> How does joint multi-object training compare with single-object specialists in interaction
+          completion and tracking accuracy?
+        </li>
+        <li>
+          <b>Q3.</b> How do the policy architecture and optimizer affect learning efficiency?
+        </li>
+      </ul>
+    </div>
+
+    <figure class="data-dist">
+      <div class="dist-legend"><span class="train">Train</span><span class="test">Test</span></div>
+      <div class="dist-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th colspan="2">Object</th>
+            <th class="group" colspan="3">Reference trajectories</th>
+            <th class="group" colspan="3">Motion duration (min)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/tripod.png" alt="" loading="lazy"></td>
+            <td>Tripod</td>
+            <td class="bar"><div class="stack" title="Train 1131 trajectories · Test 150 trajectories"><span class="train" style="width:88.29%"></span><span class="test" style="width:11.71%"></span></div></td>
+            <td class="num">1,131</td>
+            <td class="num test">150</td>
+            <td class="bar"><div class="stack" title="Train 155.8 min · Test 18.9 min"><span class="train" style="width:85.32%"></span><span class="test" style="width:10.35%"></span></div></td>
+            <td class="num">155.8</td>
+            <td class="num test">18.9</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/whitechair.png" alt="" loading="lazy"></td>
+            <td>White chair</td>
+            <td class="bar"><div class="stack" title="Train 1066 trajectories · Test 175 trajectories"><span class="train" style="width:83.22%"></span><span class="test" style="width:13.66%"></span></div></td>
+            <td class="num">1,066</td>
+            <td class="num test">175</td>
+            <td class="bar"><div class="stack" title="Train 155.1 min · Test 24.6 min"><span class="train" style="width:84.94%"></span><span class="test" style="width:13.47%"></span></div></td>
+            <td class="num">155.1</td>
+            <td class="num test">24.6</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/woodchair.png" alt="" loading="lazy"></td>
+            <td>Wood chair</td>
+            <td class="bar"><div class="stack" title="Train 987 trajectories · Test 230 trajectories"><span class="train" style="width:77.05%"></span><span class="test" style="width:17.95%"></span></div></td>
+            <td class="num">987</td>
+            <td class="num test">230</td>
+            <td class="bar"><div class="stack" title="Train 149.9 min · Test 32.7 min"><span class="train" style="width:82.09%"></span><span class="test" style="width:17.91%"></span></div></td>
+            <td class="num">149.9</td>
+            <td class="num test">32.7</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/clothesstand.png" alt="" loading="lazy"></td>
+            <td>Clothes stand</td>
+            <td class="bar"><div class="stack" title="Train 861 trajectories · Test 145 trajectories"><span class="train" style="width:67.21%"></span><span class="test" style="width:11.32%"></span></div></td>
+            <td class="num">861</td>
+            <td class="num test">145</td>
+            <td class="bar"><div class="stack" title="Train 134.7 min · Test 20.1 min"><span class="train" style="width:73.77%"></span><span class="test" style="width:11.01%"></span></div></td>
+            <td class="num">134.7</td>
+            <td class="num test">20.1</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/smalltable.png" alt="" loading="lazy"></td>
+            <td>Small table</td>
+            <td class="bar"><div class="stack" title="Train 824 trajectories · Test 210 trajectories"><span class="train" style="width:64.32%"></span><span class="test" style="width:16.39%"></span></div></td>
+            <td class="num">824</td>
+            <td class="num test">210</td>
+            <td class="bar"><div class="stack" title="Train 126.2 min · Test 28.4 min"><span class="train" style="width:69.11%"></span><span class="test" style="width:15.55%"></span></div></td>
+            <td class="num">126.2</td>
+            <td class="num test">28.4</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/floorlamp.png" alt="" loading="lazy"></td>
+            <td>Floor lamp</td>
+            <td class="bar"><div class="stack" title="Train 805 trajectories · Test 165 trajectories"><span class="train" style="width:62.84%"></span><span class="test" style="width:12.88%"></span></div></td>
+            <td class="num">805</td>
+            <td class="num test">165</td>
+            <td class="bar"><div class="stack" title="Train 124.3 min · Test 20.1 min"><span class="train" style="width:68.07%"></span><span class="test" style="width:11.01%"></span></div></td>
+            <td class="num">124.3</td>
+            <td class="num test">20.1</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/largebox.png" alt="" loading="lazy"></td>
+            <td>Large box</td>
+            <td class="bar"><div class="stack" title="Train 791 trajectories · Test 230 trajectories"><span class="train" style="width:61.75%"></span><span class="test" style="width:17.95%"></span></div></td>
+            <td class="num">791</td>
+            <td class="num test">230</td>
+            <td class="bar"><div class="stack" title="Train 119.0 min · Test 32.9 min"><span class="train" style="width:65.17%"></span><span class="test" style="width:18.02%"></span></div></td>
+            <td class="num">119.0</td>
+            <td class="num test">32.9</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/largetable.png" alt="" loading="lazy"></td>
+            <td>Large table</td>
+            <td class="bar"><div class="stack" title="Train 767 trajectories · Test 180 trajectories"><span class="train" style="width:59.88%"></span><span class="test" style="width:14.05%"></span></div></td>
+            <td class="num">767</td>
+            <td class="num test">180</td>
+            <td class="bar"><div class="stack" title="Train 120.8 min · Test 25.3 min"><span class="train" style="width:66.16%"></span><span class="test" style="width:13.86%"></span></div></td>
+            <td class="num">120.8</td>
+            <td class="num test">25.3</td>
+          </tr>
+          <tr>
+            <td class="thumb"><img src="./experiments/thumbs/smallbox.png" alt="" loading="lazy"></td>
+            <td>Small box</td>
+            <td class="bar"><div class="stack" title="Train 637 trajectories · Test 120 trajectories"><span class="train" style="width:49.73%"></span><span class="test" style="width:9.37%"></span></div></td>
+            <td class="num">637</td>
+            <td class="num test">120</td>
+            <td class="bar"><div class="stack" title="Train 87.8 min · Test 17.1 min"><span class="train" style="width:48.08%"></span><span class="test" style="width:9.36%"></span></div></td>
+            <td class="num">87.8</td>
+            <td class="num test">17.1</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td class="thumb"></td>
+            <td class="label">All</td>
+            <td class="bar"></td>
+            <td class="num label">7,869</td>
+            <td class="num sub">1,605</td>
+            <td class="bar"></td>
+            <td class="num label">1173.6</td>
+            <td class="num sub">220.1</td>
+          </tr>
+        </tfoot>
+      </table>
+      </div>
+      <figcaption class="figure-caption">
+        <b>Per-object number of reference trajectories and total motion duration in the training and test splits.</b>
+      </figcaption>
+    </figure>
+    <script type="module" src="./scripts/object-thumb-preview.mjs?v=20260911-figures"></script>
+
+    <!-- ---------- Subsection ---------- -->
+    <!-- Pair each .section-subtitle with a .toc-subsection entry in the TOC. -->
+    <!-- Q1 chart markup lives in experiments/q1-figure.html. -->
+    <div class="section-subtitle" id="experiment-one">Whole-Body Dexterous Loco-Manipulation</div>
+
+    <div class="section">
+      A single policy learns 7,869 reference trajectories across nine objects, reaching <b>92.45% success</b>
+      and <b>96.30% progress</b> on training sequences at 100k iterations. Without additional training, it achieves
+      <b>64.98% success</b> and <b>84.52% progress</b> on unseen interaction sequences of the same objects,
+      with comparable tracking errors over executed portions of the trajectories.
+    </div>
+
+    <div id="q1-figure" data-figure-src="./experiments/q1-figure.html" aria-busy="true">
+      <p role="status">Loading evaluation charts…</p>
+    </div>
+
+    <p class="figure-caption">
+      <b>Evaluation against training iterations.</b>
+    </p>
+
+    <!-- ---------- Subsection ---------- -->
+    <div class="section-subtitle" id="experiment-two">Joint Multi-Object Skill Learning</div>
+
+    <div class="section">
+      Trained jointly on all nine objects for 27k iterations, one policy reaches <b>95.26% success</b> on
+      <math xmlns="http://www.w3.org/1998/Math/MathML" class="inline-math"><msub><mi>&#119967;</mi><mtext>test</mtext></msub></math>, against <b>91.48%</b> for nine single-object specialists given the same aggregate budget. It
+      matches the specialists on three objects and improves on the other six, and regresses on none. The
+      specialists nonetheless track more closely on seven of the eight error metrics, so lower imitation error does
+      not imply more reliable interaction completion.
+    </div>
+
+    <!-- Q2 chart markup lives in experiments/q2-figure.html. -->
+    <div id="q2-figure" data-figure-src="./experiments/q2-figure.html" aria-busy="true">
+      <p role="status">Loading experiment charts…</p>
+    </div>
+
+    <!-- ---------- Subsection ---------- -->
+    <div class="section-subtitle" id="experiment-three">Architecture and Optimizer Ablation</div>
+
+    <div class="section">
+      We compare SimBaV2 and MLP backbones under Muon and AdamW within a common budget of
+      3k iterations on the small-table task. Both Muon runs pull ahead of their AdamW counterparts early and stay ahead, worth <b>90 to
+      100</b> in final episode length, while SimBaV2 adds a further <b>11 to 21</b>.
+    </div>
+
+    <!-- Q3 chart markup lives in experiments/q3-figure.html. -->
+    <div id="q3-figure" data-figure-src="./experiments/q3-figure.html" aria-busy="true">
+      <p role="status">Loading experiment charts…</p>
+    </div>
+    <script type="module" src="./scripts/experiment-figures.mjs?v=20260911-q3-hover"></script>
+    <p class="figure-caption">
+      <b>Sample-efficiency ablation.</b> Faint traces are raw means; solid and dashed
+      lines are 50-iteration EMA.
+    </p>
+
+    <!-- ==================== Failure Cases ==================== -->
+    <div class="tagline" id="failure-cases">Failure Cases</div>
+
+    <!-- Configure video paths and failure descriptions in scripts/failure-cases.mjs. -->
+    <div class="failure-carousel" id="failure-carousel" role="region" aria-roledescription="carousel"
+         aria-labelledby="failure-cases">
+      <button class="failure-arrow failure-prev" type="button" aria-label="Previous failure case"
+              aria-controls="failure-viewport" disabled><span aria-hidden="true">&lt;</span></button>
+      <div class="failure-viewport" id="failure-viewport">
+        <div class="failure-track"></div>
+      </div>
+      <template id="failure-template">
+        <figure class="failure-slide" role="group" aria-roledescription="slide">
+          <div class="failure-video-frame">
+            <video controls muted loop playsinline preload="metadata" hidden></video>
+            <div class="failure-placeholder">Video coming soon</div>
+            <span class="failure-count" aria-hidden="true"></span>
+          </div>
+          <figcaption class="failure-caption">
+            <strong class="failure-title"></strong><span class="failure-description"></span>
+          </figcaption>
+        </figure>
+      </template>
+      <button class="failure-arrow failure-next" type="button" aria-label="Next failure case"
+              aria-controls="failure-viewport" disabled><span aria-hidden="true">&gt;</span></button>
+      <span class="failure-status" role="status" aria-live="polite" aria-atomic="true"></span>
+    </div>
+    <noscript><p>Enable JavaScript to switch between failure cases.</p></noscript>
+    <script type="module" src="./scripts/failure-cases.mjs?v=20260911-autoplay"></script>
+
+  </div> <!-- End of main-content div -->
+
+  <div class="footer">
+    Website template modified from <a href="https://videomimic.net/" target="_blank">VideoMimic</a>.
+  </div>
+
+</body>
+</html>

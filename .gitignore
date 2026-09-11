@@ -71,8 +71,10 @@ _build
 **/outputs/*
 **/figs/*
 
-# docs
+# Documentation (publish the root GitHub Pages site)
 **/docs/*
+!/docs/*
+!/docs/demo/vendor/three/build/
 
 # data
 data/
