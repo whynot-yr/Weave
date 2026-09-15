@@ -140,6 +140,12 @@ body {
 .authors .affiliation-row .affiliation {
     display: inline;
 }
+.authors .author-note {
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 400;
+    color: #666;
+}
 /* Style for links within the authors block */
 .authors a {
     color: inherit; /* Inherit the color from the .authors class */
