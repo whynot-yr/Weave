@@ -631,10 +631,11 @@ video.r2s-video-item {
   color: #f1f1f1; /* Light text color for readability */
   padding: 20px;
   border-radius: 8px;
-  margin: 80px auto -40px; /* Spacing and centering, bottom margin reduced to 20px */
+  margin: 20px 0 40px;
   max-width: 1000px;  /* Max width of the BibTeX box */
   box-sizing: border-box;
   font-size: 14px; /* Base font size for BibTeX */
+  line-height: 1.6;
 }
 
 .bibtex-title {
