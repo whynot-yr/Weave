@@ -14,7 +14,7 @@
 2. Clone the repository
   ```bash
     git clone https://github.com/xiaohu-art/Weave.git
-    cd g1_hoi_learning
+    cd Weave
     git lfs install && git lfs pull
   ```
 
