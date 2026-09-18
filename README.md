@@ -13,7 +13,7 @@
 
 2. Clone the repository
   ```bash
-    git clone https://github.com/xiaohu-art/g1_hoi_learning.git
+    git clone https://github.com/xiaohu-art/Weave.git
     cd g1_hoi_learning
     git lfs install && git lfs pull
   ```
