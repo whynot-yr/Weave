@@ -18,7 +18,7 @@ _COMMON_RIGID_PROPS = sim_utils.RigidBodyPropertiesCfg(
 _COMMON_MASS_PROPS = sim_utils.MassPropertiesCfg(density=200.0)
 
 _COMMON_VISUAL_MATERIAL = sim_utils.PreviewSurfaceCfg(
-    diffuse_color=(0.85, 0.45, 0.20),   # warm orange
+    diffuse_color=(0.1, 0.45, 0.20),   # warm orange
     roughness=0.6,
     metallic=0.0,
 )
