@@ -22,13 +22,13 @@ env:
     motion:
       motion_files:
         # - ./data/test/clothesstand_29clip_var5.npz
-        # - ./data/test/floorlamp_33clip_var5.npz
+        - ./data/test/floorlamp_033_var5.npz
         # - ./data/test/largebox_46clip_var5.npz
         # - ./data/test/largetable_36clip_var5.npz
         # - ./data/test/smallbox_24clip_var5.npz
         # - ./data/test/smalltable_42clip_var5.npz
         # - ./data/test/tripod_30clip_var5.npz
-        - ./data/test/whitechair_35clip_var5.npz
+        # - ./data/test/whitechair_35clip_var5.npz
         # - ./data/test/woodchair_46clip_var5.npz
       rsi: false
 

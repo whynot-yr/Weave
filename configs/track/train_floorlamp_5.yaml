@@ -1,0 +1,117 @@
+# @package _global_
+#
+# Usage:
+#   python scripts/rsl_rl/train.py --task=G1-Inspire-HOI-v0 --headless \
+#       --config-dir ./configs/track --config-name train
+#
+# Override anything inline:
+#   ... --config-name train env.scene.num_envs=2048 agent.max_iterations=500
+
+defaults:
+  - G1-Inspire-HOI-v0
+  - _self_
+
+# =============================================================================
+# Environment
+# =============================================================================
+
+env:
+  scene:
+    num_envs: 4096
+
+  commands:
+    motion:
+      motion_files:
+        - ./data/test/floorlamp_033_var5.npz
+ 
+      rsi: true
+
+  # ---- reward weights & params ----
+  rewards:
+    motion_anchor_pos:    { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    motion_anchor_ori:    { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    motion_body_pos:      { weight: 1.0, params: { command_name: motion, std: 0.3 } }
+    motion_body_ori:      { weight: 1.0, params: { command_name: motion, std: 0.4 } }
+    object_pos:           { weight: 2.0, params: { command_name: motion, std: 0.2 } }
+    object_ori:           { weight: 2.0, params: { command_name: motion, std: 0.3 } }
+    hand_opposition:
+      weight: 2.0
+      params:
+        command_name: motion
+        thumb_body_name: thumb_distal
+        finger_body_names: [index_intermediate, middle_intermediate, ring_intermediate, pinky_intermediate]
+    contact:
+      weight: 2.0
+      params:
+        command_name: motion
+        sensor_name: contact_sensor
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
+        saturate_force: 5.0
+    feet_air_time:        { weight: 0.5 }
+    feet_slide:           { weight: -1.0 }
+    action_rate_l2:       { weight: -0.1 }
+    joint_limit:          { weight: -10.0 }
+
+  # ---- termination thresholds ----
+  terminations:
+    anchor_pos:    { params: { command_name: motion, threshold: 0.25 } }
+    anchor_ori:    { params: { command_name: motion, threshold: 0.8  } }
+    object_pos:    { params: { command_name: motion, threshold: 0.3 } }
+    object_ori:    { params: { command_name: motion, threshold: 0.3  } }
+    ee_body_pos:
+      params:
+        command_name: motion
+        threshold: 0.25
+        body_names:
+          - left_ankle_roll_link
+          - right_ankle_roll_link
+          - left_wrist_yaw_link
+          - right_wrist_yaw_link
+    bad_contact:
+      params:
+        command_name: motion
+        sensor_name: contact_sensor
+        hand_body_names: [".*_thumb_intermediate", ".*_thumb_distal", ".*_index_intermediate", ".*_middle_intermediate", ".*_ring_intermediate", ".*_pinky_intermediate"]
+        max_lost_frames: 10
+
+# =============================================================================
+# Agent (PPO + Muon + SimBa)
+# =============================================================================
+
+agent:
+  experiment_name: g1_inspire_hoi
+  num_steps_per_env: 32
+  max_iterations: 100000
+  save_interval: 100
+
+  policy:
+    init_noise_std: 1.0
+    actor_hidden_dim: 512
+    critic_hidden_dim: 512
+    actor_num_blocks: 1
+    critic_num_blocks: 2
+    expansion: 4
+    latent_dim: 128
+    encoder_hidden_dims:
+      ref_motion_body: { type: mlp, hidden_dims: [256] }
+      ref_motion_object: { type: mlp, hidden_dims: [256] }
+      object_state: { type: mlp, hidden_dims: [256] }
+      robot_proprio: { type: mlp, hidden_dims: [256] }
+      robot_privileged: { type: mlp, hidden_dims: [256] }
+    actor_obs_normalization: true
+    critic_obs_normalization: true
+
+  algorithm:
+    learning_rate: 1.0e-4
+    schedule: adaptive
+    desired_kl: 0.01
+    entropy_coef: 5.0e-4
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    gamma: 0.99
+    lam: 0.95
+    clip_param: 0.2
+    use_clipped_value_loss: true
+    value_loss_coef: 1.0
+    max_grad_norm: 1.0
+    weight_decay: 0.01
