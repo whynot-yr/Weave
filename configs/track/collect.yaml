@@ -1,0 +1,43 @@
+# @package _global_
+#
+# Clean, deterministic rollout collection. The collector selects clips and
+# sets num_envs from --num_rollouts before constructing the environment.
+
+defaults:
+  - eval
+  - _self_
+
+env:
+  scene:
+    head_camera:
+      width: 224
+      height: 224
+      update_period: 0.0
+      data_types: [rgb, depth]
+
+  commands:
+    motion:
+      motion_files:
+        - /data/g1_hoi_ws/Weave/data/train/floorlamp_805clip.npz
+      eval_mode: true
+      rsi: false
+      debug_vis: false
+
+  observations:
+    robot_proprio:
+      enable_corruption: false
+
+  # Disable every training-time domain randomization for the clean V1 set.
+  events:
+    physics_material: null
+    object_physics_material: null
+    base_com: null
+    randomize_finger_gains: null
+    randomize_finger_armature: null
+    push_robot: null
+    randomize_light_startup: null
+    randomize_light_interval: null
+
+agent:
+  policy:
+    compile: false

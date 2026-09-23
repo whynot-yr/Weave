@@ -37,12 +37,36 @@ class MimicJointPositionAction(JointPositionAction):
         self._mimic_offsets = torch.tensor(
             [o for _, _, o in cfg.mimic.values()], device=env.device, dtype=torch.float32
         )
+        self._all_joint_targets = torch.zeros(
+            (env.num_envs, self._asset.num_joints), device=env.device, dtype=torch.float32
+        )
+
+    def expand_actions(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return processed drive targets and full articulation-order targets without mutating the environment."""
+        processed = actions * self._scale + self._offset
+        if self.cfg.clip is not None:
+            processed = torch.clamp(processed, min=self._clip[:, :, 0], max=self._clip[:, :, 1])
+        driver_targets = processed[:, self._driver_action_idx]
+        mimic_targets = driver_targets * self._mimic_multipliers + self._mimic_offsets
+        full_targets = torch.zeros(
+            (actions.shape[0], self._asset.num_joints), device=actions.device, dtype=actions.dtype
+        )
+        full_targets[:, self._joint_ids] = processed
+        full_targets[:, self._mimic_joint_ids] = mimic_targets
+        return processed, full_targets
+
+    @property
+    def all_joint_targets(self) -> torch.Tensor:
+        """Most recently applied position targets in articulation joint order."""
+        return self._all_joint_targets
 
     def apply_actions(self):
         drive_targets = self.processed_actions
         driver_targets = drive_targets[:, self._driver_action_idx]
         mimic_targets = driver_targets * self._mimic_multipliers + self._mimic_offsets
         all_targets = torch.cat([drive_targets, mimic_targets], dim=1)
+        self._all_joint_targets[:, self._joint_ids] = drive_targets
+        self._all_joint_targets[:, self._mimic_joint_ids] = mimic_targets
         self._asset.set_joint_position_target(all_targets, joint_ids=self._all_joint_ids)
 
 

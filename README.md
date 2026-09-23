@@ -158,6 +158,35 @@ python scripts/rsl_rl/play.py --task=G1-Inspire-HOI-v0 \
 
 ---
 
+## 📷 Rollout collection
+
+`collect.py` samples 100 unique clips from the 805-clip floor-lamp reference set, executes one clean rollout per
+clip, and records synchronized robot/object state, contacts, references, policy observations/actions, rewards, and
+224×224 head-camera RGB-D. Sampling defaults to seed 42; both successful and failed episodes are retained.
+
+```bash
+python scripts/rsl_rl/collect.py --task=G1-Inspire-HOI-v0 \
+    --config-dir ./configs/track --config-name collect \
+    --load_run <run-directory> --checkpoint model_2000.pt \
+    --num_rollouts 100 --sampling_seed 42 \
+    --output_dir ./datasets/floorlamp_rollout_100_seed42
+```
+
+Change `--num_rollouts` to collect a different number of unique references. If `--output_dir` is omitted, its default
+name is generated from `--num_rollouts` and `--sampling_seed`.
+
+The output directory contains `rollouts.h5`, `manifest.json`, the sampled clip list, and the resolved configuration.
+Depth is stored losslessly as unsigned 16-bit millimeters (`0` means invalid); RGB is stored as `uint8`. Positions
+use world-aligned axes with each parallel environment's origin removed, and quaternions use `wxyz` ordering.
+
+Validate a completed collection with:
+
+```bash
+python scripts/inspect_rollout.py ./datasets/floorlamp_rollout_100_seed42
+```
+
+---
+
 ## 🧹 Code Formatting
 
 ```bash

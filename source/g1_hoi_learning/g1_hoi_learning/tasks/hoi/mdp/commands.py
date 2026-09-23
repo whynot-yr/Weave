@@ -205,11 +205,25 @@ class MotionCommand(CommandTerm):
                 raise ValueError(
                     f"eval_mode requires a single-object motion set, got {self.motion.num_objects} objects "
                 )
-            if self.num_envs != self.motion.num_clips:
+            if self.cfg.eval_clip_ids:
+                if len(self.cfg.eval_clip_ids) != self.num_envs:
+                    raise ValueError(
+                        "eval_clip_ids must contain exactly one clip id per environment: "
+                        f"got {len(self.cfg.eval_clip_ids)} ids for {self.num_envs} envs"
+                    )
+                self._eval_env_clip = torch.tensor(
+                    self.cfg.eval_clip_ids, dtype=torch.long, device=self.device
+                )
+                if torch.any(self._eval_env_clip < 0) or torch.any(self._eval_env_clip >= self.motion.num_clips):
+                    raise ValueError(
+                        f"eval_clip_ids must be in [0, {self.motion.num_clips - 1}]"
+                    )
+            else:
+                self._eval_env_clip = torch.arange(self.num_envs, device=self.device) % self.motion.num_clips
+            if not self.cfg.eval_clip_ids and self.num_envs != self.motion.num_clips:
                 print(
                     f"[WARN] eval_mode: num_envs={self.num_envs} != num_clips={self.motion.num_clips};"
                 )
-            self._eval_env_clip = torch.arange(self.num_envs, device=self.device) % self.motion.num_clips
             self.env_clip = self._eval_env_clip.clone()
 
         # caches refreshed in _update_command
@@ -565,6 +579,9 @@ class MotionCommandCfg(CommandTermCfg):
 
     eval_mode: bool = False
     """Clip-wise evaluation. Requires a single-object motion set."""
+
+    eval_clip_ids: list[int] = []
+    """Optional explicit clip id for every environment in eval mode."""
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""
