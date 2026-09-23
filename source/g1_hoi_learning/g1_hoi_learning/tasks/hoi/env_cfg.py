@@ -34,7 +34,7 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.GroundPlaneCfg(
-            # usd_path=GROUND_PLANE_USD_PATH,
+            usd_path=GROUND_PLANE_USD_PATH,
             size=(100.0, 100.0),
             color=(0.8, 0.8, 0.8),
             physics_material=sim_utils.RigidBodyMaterialCfg(
@@ -45,7 +45,35 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    robot: ArticulationCfg = G1_INSPIRE_CFG.replace(
+        prim_path="{ENV_REGEX_NS}/Robot"
+    )
+
+    head_camera = TiledCameraCfg(
+        # Camera 会成为 torso_link 的子 Prim，随机器人运动
+        prim_path="{ENV_REGEX_NS}/Robot/torso_link/head_camera",
+        update_period=0.0,
+        width=640,
+        height=480,
+        data_types=["rgb", "depth"],
+        spawn=sim_utils.PinholeCameraCfg(
+            # 约等于 D435 RGB 相机的水平视场；精确值可按标定参数调整
+            focal_length=15.3,
+            horizontal_aperture=20.955,
+            focus_distance=400.0,
+            clipping_range=(0.1, 10.0),
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            # 来自 URDF 的 d435_joint
+            pos=(0.0576235, 0.01753, 0.42987),
+            # rpy=(0, 0.8307767, 0) 转换成 wxyz 四元数
+            rot=(0.9149597, 0.0, 0.4035453, 0.0),
+            # G1/URDF 坐标：+X 向前、+Z 向上
+            convention="world",
+        ),
+    )
+
+
 
     object: RigidObjectCfg = MISSING   # set in G1HoiLearningEnvCfg.__post_init__ from motion_file's object_name
 
@@ -116,6 +144,30 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
             ),
         ),
     )
+    
+    curtain_front = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/CurtainFront",
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(1.5, 0.0, 1.25),
+                rot=(1.0, 0.0, 0.0, 0.0),
+            ),
+            spawn=sim_utils.CuboidCfg(
+                size=(0.02, 3.0, 2.5),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    kinematic_enabled=True,
+                    disable_gravity=True,
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(
+                    collision_enabled=False,
+                ),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.12, 0.12, 0.12),
+                    roughness=0.8,
+                ),
+            ),
+        )
+
+
 
 
     dome_light = AssetBaseCfg(
