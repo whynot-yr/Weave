@@ -1,5 +1,7 @@
 # WEAVE 高层 Diffusion Policy
 
+DP→PPO 双进程 HTTP 推理、独立仿真入口与运行命令见 [部署说明](DEPLOYMENT.md)。
+
 本目录只新增离线训练/推理工具，**不修改原有 WEAVE PPO、环境、观测或安装脚本**。
 LeRobot 作为依赖使用，不修改其源码；HumanoidArena 的写入流程迁移为
 `LeRobotDataset.create → add_frame → save_episode → finalize`，无需运行时导入 Arena。
