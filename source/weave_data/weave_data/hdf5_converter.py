@@ -141,6 +141,7 @@ def convert_hdf5(source, output, repo_id, episodes=None, success_only=False, use
                         "episode_index": len(protocol["episodes"]),
                         "source_episode": e,
                         "clip_name": f["episodes/clip_name"].asstr()[e],
+                        "object_name": object_name,
                         "length": length,
                         "success": bool(f["episodes/success"][e]),
                     }

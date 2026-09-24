@@ -54,6 +54,37 @@ RGB、state、action、action_is_pad。直接使用原版 `lerobot-train` 加载
 当前本地 LeRobot 0.6.2 需要 Python 3.12，与 Sim 的 Python 3.11 分开。
 新增独立环境位于 WEAVE 内，不向现有 `sim51` 安装/升级 LeRobot。
 
+### 推荐：保存并复用数据划分
+
+转换完成后，按原始 motion 家族划分，而不是随机拆帧或窗口：
+
+```bash
+.venv-dp/bin/python scripts/dp/split_dataset.py \
+  datasets/floorlamp_dp outputs/floorlamp_split.json --val-ratio 0.2 --seed 42
+
+.venv-dp/bin/python scripts/dp/compute_stats.py \
+  datasets/floorlamp_dp outputs/floorlamp_stats.json --split outputs/floorlamp_split.json
+
+.venv-dp/bin/python scripts/dp/train.py \
+  --dataset datasets/floorlamp_dp --stats outputs/floorlamp_stats.json \
+  --split outputs/floorlamp_split.json --output outputs/floorlamp_train \
+  --device cuda --steps 100000 --batch-size 64
+```
+
+工具仅读取 `meta/weave_protocol.json`，不解码视频、不复制或移动数据。
+`clip_name` 去掉末尾 `_vNN` 后作为家族，同一家族的所有变体和重复 episode 进入同一集合。
+验证家族数量取 `ceil(家族数 × val_ratio)`，并保证两组非空；只有一个家族时拒绝划分。
+33 个家族默认分成 26/7。输出记录数据集 UUID、episode 和家族列表、两边的帧数汇总；
+加载时检查数据集匹配、完整覆盖、无重复及家族隔离。已有输出文件不会覆盖。
+
+多物体数据可添加 `--by-object` 按物体分别划分，每个物体至少需要两个家族。
+新转换器会写入 `object_name`；旧数据缺少该字段时不能使用此选项，但仍可按全局家族划分。
+自定义命名不符合 `_vNN` 规则时，先确认家族命名，不能把未知变体误当独立运动。
+
+`compute_stats.py --split` 只读取训练 episode；`train.py --split` 同时读取训练和验证 episode。
+统计仍需单独生成，不会由训练自动计算。原有显式 `--episodes` / `--train-episodes` 用法保留，
+但不能与 `--split` 混用。训练仍按现有逻辑定期验证和保存 checkpoint，不自动挑选最佳模型。
+
 ```bash
 cd /data/g1_hoi_ws/Weave
 bash scripts/dp/install.sh /data/g1_hoi_ws/lerobot

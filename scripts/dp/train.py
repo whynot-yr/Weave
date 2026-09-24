@@ -7,7 +7,6 @@ presets and save_pretrained. No monkeypatches of lerobot-train or model code.
 import argparse
 import json
 import math
-import re
 import shutil
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from torch.utils.data import DataLoader
 from weave_data.dp_codec import IMAGE_KEY
 from weave_data.dp_dataset import DPWindowDataset
+from weave_data.dp_split import load_split, motion_family
 from weave_data.dp_stats import load_stats
 
 
@@ -27,7 +27,9 @@ def parse_args():
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--stats", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--train-episodes", nargs="+", type=int, required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--split", type=Path)
+    selection.add_argument("--train-episodes", nargs="+", type=int)
     parser.add_argument("--eval-episodes", nargs="+", type=int, default=[])
     parser.add_argument("--steps", type=int, default=100000)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -39,6 +41,11 @@ def parse_args():
     parser.add_argument("--resume", type=Path, help="Trusted local step checkpoint; steps must remain unchanged")
     parser.add_argument("--smoke", action="store_true", help="Small U-Net, no downloaded vision weights; testing only")
     args = parser.parse_args()
+    if args.split:
+        if args.eval_episodes:
+            parser.error("--split cannot be combined with --eval-episodes")
+        split = load_split(args.split, args.dataset)
+        args.train_episodes, args.eval_episodes = split["train_episodes"], split["val_episodes"]
     if min(args.steps, args.batch_size, args.save_every, args.eval_every) <= 0 or args.workers < 0:
         parser.error("Steps, batch size and intervals must be positive; workers must be nonnegative")
     return args
@@ -50,7 +57,7 @@ def split_guard(train, evaluation):
 
     def families(dataset):
         return {
-            re.sub(r"_v\d+$", "", e["clip_name"])
+            motion_family(e["clip_name"])
             for e in dataset.protocol["episodes"]
             if e["episode_index"] in dataset.episodes
         }
