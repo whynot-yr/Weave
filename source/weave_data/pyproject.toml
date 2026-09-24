@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weave-data"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["torch", "numpy", "h5py"]
+
+[project.optional-dependencies]
+dp = ["lerobot[dataset,training,diffusion]==0.6.2; python_version >= '3.12'"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["weave_data*"]

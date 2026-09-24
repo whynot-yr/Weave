@@ -78,15 +78,16 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     object: RigidObjectCfg = MISSING   # set in G1HoiLearningEnvCfg.__post_init__ from motion_file's object_name
 
     # Visual-only background curtains.
+    # Enclose a 9 m x 9 m area, with 3 m tall curtains resting on the ground.
     # Coordinates are relative to each parallel environment origin.
     curtain_left = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CurtainLeft",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, -1.5, 1.25),
+            pos=(0.0, -4.5, 1.5),
             rot=(0.7071068, 0.0, 0.0, -0.7071068),
         ),
         spawn=sim_utils.CuboidCfg(
-            size=(0.02, 3.0, 2.5),
+            size=(0.02, 9.0, 3.0),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
                 disable_gravity=True,
@@ -104,11 +105,11 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     curtain_back = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CurtainBack",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(-1.5, 0.0, 1.25),
+            pos=(-4.5, 0.0, 1.5),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=sim_utils.CuboidCfg(
-            size=(0.02, 3.0, 2.5),
+            size=(0.02, 9.0, 3.0),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
                 disable_gravity=True,
@@ -126,11 +127,11 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     curtain_right = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/CurtainRight",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, 1.5, 1.25),
+            pos=(0.0, 4.5, 1.5),
             rot=(0.7071068, 0.0, 0.0, -0.7071068),
         ),
         spawn=sim_utils.CuboidCfg(
-            size=(0.02, 3.0, 2.5),
+            size=(0.02, 9.0, 3.0),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
                 disable_gravity=True,
@@ -148,11 +149,11 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
     curtain_front = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/CurtainFront",
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(1.5, 0.0, 1.25),
+                pos=(4.5, 0.0, 1.5),
                 rot=(1.0, 0.0, 0.0, 0.0),
             ),
             spawn=sim_utils.CuboidCfg(
-                size=(0.02, 3.0, 2.5),
+                size=(0.02, 9.0, 3.0),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     kinematic_enabled=True,
                     disable_gravity=True,
@@ -594,7 +595,7 @@ class TerminationsCfg:
 class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
     """G1 HOI learning environment config."""
 
-    scene: G1HoiLearningSceneCfg = G1HoiLearningSceneCfg(num_envs=4096, env_spacing=4.0)
+    scene: G1HoiLearningSceneCfg = G1HoiLearningSceneCfg(num_envs=4096, env_spacing=10.0)
     commands: CommandsCfg = CommandsCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
