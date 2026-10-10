@@ -1,0 +1,10 @@
+This package includes adaptations of NVIDIA Isaac-GR00T code:
+gr00t/model/modules/embodiment_conditioned_mlp.py
+gr00t/model/modules/dit.py
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+Adapted from the local Isaac-GR00T checkout at commit
+51d4c89 (GR00T N1.7). Changes include WEAVE reference125 input/output,
+768-dimensional hidden representations, DINOv2 image context, removal of
+state/text inputs, and native PyTorch implementations of diffusers operations.

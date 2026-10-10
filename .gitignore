@@ -78,6 +78,8 @@ _build
 
 # data
 data/
+!source/weave_policy/weave_policy/data/
+!source/weave_policy/weave_policy/data/*.py
 
 # model file
 *.pt

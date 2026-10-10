@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weave-reference-policy"
+version = "0.1.0"
+description = "Image-conditioned GR00T-style flow matching for WEAVE references"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = ["torch>=2.0", "numpy>=1.24", "h5py>=3.8"]
+
+[project.optional-dependencies]
+vision = ["torchvision"]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["weave_policy*"]
