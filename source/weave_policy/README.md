@@ -58,6 +58,8 @@ weave_policy/
     timestep_encoder.py      DiT 全局 time MLP
     dit.py                   GR00T block 层级
     reference_decoder.py     768→768→125 velocity decoder
+  training/
+    distributed.py          DDP 初始化、全局有效元素归一化、验证 sampler、rank 0 写入
   flow_matching_policy.py    损失、Euler 推理、checkpoint
   predictor.py               RGB/token 推理及 encoder 一致性检查
   weave_adapter.py           WEAVE 协议检查、诊断 reference replay
@@ -119,6 +121,86 @@ python scripts/reference_policy/train.py \
   --resume outputs/reference_train/step_00010000 --output outputs/reference_resume
 ```
 
+## 双卡 DDP 训练
+
+采用原生 PyTorch DDP，一张卡一个进程；每张卡持有完整 Policy、梯度及 Adam 状态。
+`LOCAL_RANK` 决定 CUDA 设备，DDP 模式下 `--device cuda:0` 中的索引不会让两个进程占同一张卡。
+不使用 DeepSpeed。WEAVE 的所有原始采样起点、尾部末帧复制和 `reference_mask` 保持原来的处理。
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nnodes=1 --nproc-per-node=2 \
+  scripts/reference_policy/train.py \
+  --source datasets/floorlamp_rollout_100_seed42/rollouts.h5 \
+  --split outputs/reference_split.json --stats outputs/reference_stats.json \
+  --features outputs/reference_dino.h5 --output outputs/reference_ddp \
+  --batch-size 16 --gradient-accumulation-steps 1 \
+  --workers 4 --amp --steps 100000
+```
+
+也可以用 `scripts/reference_policy/train_ddp.sh`，传入相同的训练参数；它默认选择 GPU `0,1`。
+使用特定 Python 环境时，例如：
+
+```bash
+PYTHON=/data/g1_hoi_ws/sim51/bin/python CUDA_VISIBLE_DEVICES=0,1 \
+  bash scripts/reference_policy/train_ddp.sh \
+  --source /path/to/rollouts.h5 --split /path/to/split.json \
+  --stats /path/to/stats.json --features /path/to/dino.h5 \
+  --output /path/to/new_run --batch-size 16 --amp
+```
+
+参数定义：
+
+| 参数 | 含义 |
+| --- | --- |
+| `--batch-size` | 每张卡的 microbatch size |
+| `--gradient-accumulation-steps` | 每次 optimizer 更新累积的 microbatch 数，默认 1 |
+| `--workers` | 每个进程的 DataLoader worker 数 |
+| `--steps` | optimizer 更新次数；验证、保存和 scheduler 都按更新计数 |
+| `--amp` | Policy 使用 BF16 autocast；DINO 在线编码保持 FP32，误差求和为 FP32 |
+
+全局 batch 为 `每卡 batch × 卡数 × 累积次数`，上例是 `16×2×1=32`；epoch 最后的
+batch 或累积窗口可以更小。`run_args.json` 保存该设置；不会自动按卡数调整学习率。
+
+每次更新优化 `所有卡、所有累积 microbatch 的 masked error sum / 有效标量元素总数`。
+本卡反向 loss 是 `world_size * local_error_sum / global_valid_count`，抵消 DDP 的梯度平均。
+所有累积 microbatch 共用整个更新窗口的分母，不再额外除以累积次数；前几个 microbatch
+在包住 forward/backward 的 `no_sync()` 中运行。同步梯度后再裁剪和更新。
+日志 `loss` 是真实全局均值，`valid_elements` 是该更新的全局有效元素数。
+
+训练使用 `DistributedSampler(drop_last=False)`，每个 epoch 设置相同 sampler seed。
+当样本数不能被卡数整除时，sampler 会重复至多 `world_size-1` 个采样位置，以保持各卡迭代次数相同；
+这个数量在启动日志中显示，与 reference 的时间 padding 是两个独立的操作。
+验证按 rank 分开索引，不补重复样本；各卡完成验证后汇总误差总和与有效数量。
+验证使用底层 Policy，允许各卡验证 batch 数不同，日志包含 `val_loss` 和 `val_valid_elements`。
+
+使用缓存时各卡读取本卡图像 tokens。在线编码时，每张卡持有冻结 DINO，放在 DDP 外；
+rank 0 先完成 Hub 加载和可能的下载，再允许其他 rank 加载，并校验 encoder ID 一致。
+长时间训练建议预先准备本地 DINO 仓库和权重，或完整 token 缓存。
+HDF5 在 DataLoader worker 内打开；使用 `spawn`，不会继承父进程打开的句柄。
+目前数值 reference 数据仍由每个训练进程加载到 CPU 内存，应按进程数考虑主存占用。
+
+### 分布式 checkpoint 与恢复
+
+只有 rank 0 写日志、运行参数和 checkpoint；写入错误会通知其他 rank。
+保存发生在完整 optimizer 更新之后，包括 optimizer、scheduler、step、epoch、下一 batch 位置、
+每个 rank 的 CPU/CUDA/Python/NumPy RNG。`model.pt` 使用底层 Policy 参数名，可直接独立推理。
+
+严格恢复要求相同卡数、每卡 batch、累积次数、seed、数据、配置和训练预算：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nnodes=1 --nproc-per-node=2 scripts/reference_policy/train.py \
+  --source datasets/floorlamp_rollout_100_seed42/rollouts.h5 \
+  --split outputs/reference_split.json --stats outputs/reference_stats.json \
+  --features outputs/reference_dino.h5 --batch-size 16 --amp --steps 100000 \
+  --resume outputs/reference_ddp/step_00010000 --output outputs/reference_ddp_resume
+```
+
+要从单卡权重开始双卡新训练，使用 `--init-checkpoint /path/to/checkpoint`，重新建立 optimizer、
+scheduler 和采样进度；它只加载权重，校验网络配置、归一化统计和 encoder ID。
+`--init-checkpoint` 与 `--resume` 互斥。旧版单卡 checkpoint 的严格恢复仅支持单卡、累积次数 1。
+
 ## 离线推理与 WEAVE 接入
 
 ```bash
@@ -173,8 +255,17 @@ PYTHONPATH=source/weave_policy python -m pytest -q \
 验证训练、checkpoint 恢复和推理，不作为预训练图像编码器的效果验证。
 `--smoke` 仅使用 2 blocks、96 维隐藏层，供流程检查，不能作为完整 768 维模型的训练结果。
 
-本次 CPU 验证产物位于仓库 `outputs/reference_impl_validation/`：真实数据 split/统计、2 帧官方
+分布式测试使用两个真实 CPU/Gloo 进程，对比有效元素数量不同、梯度累积、单卡零有效元素时的
+DDP 梯度与单卡合并数据梯度；CLI 测试覆盖双进程训练、短累积窗口、验证计数和逐项精确恢复。
+CUDA 可用时还运行单卡 BF16 + DataLoader spawn 的训练恢复测试。CPU 分布式测试无需显卡：
+
+```bash
+PYTHONPATH=source/weave_policy OMP_NUM_THREADS=2 python -m pytest -q \
+  source/weave_policy/tests/test_distributed_training.py \
+  source/weave_policy/tests/test_train_cli.py
+```
+
+历史 CPU 验证产物位于仓库 `outputs/reference_impl_validation/`：真实数据 split/统计、2 帧官方
 DINO token、2 步 smoke checkpoint、推理 NPZ，以及完整默认模型的前向/反向/4 步积分检查记录。
 真实 reference 转换与采集的 PPO observation 最大误差低于 `6e-7`。
-当前机器 NVIDIA NVML 报 `NVML_ERROR_LIB_RM_VERSION_MISMATCH`，Torch/PhysX CUDA 报 error 804；
-Isaac 入口已执行到环境创建，但无法完成 GPU 仿真闭环。以上 smoke 产物不代表策略已训练收敛。
+以上 smoke 产物不代表策略已训练收敛，也不是双卡 GPU 训练或 Isaac 仿真闭环的验证结果。

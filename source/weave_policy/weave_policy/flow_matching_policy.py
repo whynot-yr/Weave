@@ -68,8 +68,8 @@ class FlowMatchingPolicy(nn.Module):
             raise ValueError("Expected reference and mask [B,10,125]")
         reference = reference.to(self.device, dtype=torch.float32)
         mask = reference_mask.to(self.device, dtype=torch.float32)
-        if not torch.isfinite(mask).all() or not ((mask == 0) | (mask == 1)).all() or mask.sum() <= 0:
-            raise ValueError("Expected a nonempty binary reference mask")
+        if not torch.isfinite(mask).all() or not ((mask == 0) | (mask == 1)).all():
+            raise ValueError("Expected a binary reference mask")
         clean = self.normalizer.normalize(reference)
         noise = torch.randn_like(clean) if noise is None else noise.to(self.device, dtype=torch.float32)
         if noise.shape != shape or not torch.isfinite(noise).all():
@@ -85,8 +85,19 @@ class FlowMatchingPolicy(nn.Module):
         target = clean - noise
         timestep = (time * self.config.num_timestep_buckets).long()
         prediction = self.predict_velocity(noisy, timestep, images, self._categories(len(images), category_ids))
-        loss = (F.mse_loss(prediction, target, reduction="none") * mask).sum() / (mask.sum() + 1e-6)
-        return {"loss": loss, "pred_velocity": prediction, "target_velocity": target, "time": time}
+        # Expose the differentiable numerator and integer denominator separately.
+        # The trainer normalizes over all ranks and accumulation microbatches.
+        loss_sum = (F.mse_loss(prediction.float(), target.float(), reduction="none") * mask).sum()
+        valid_count = reference_mask.to(device=self.device, dtype=torch.int64).sum()
+        loss = loss_sum / (valid_count.to(loss_sum.dtype) + 1e-6)
+        return {
+            "loss": loss,
+            "loss_sum": loss_sum,
+            "valid_count": valid_count,
+            "pred_velocity": prediction,
+            "target_velocity": target,
+            "time": time,
+        }
 
     @torch.no_grad()
     def sample_normalized(self, image_tokens, num_steps=None, category_ids=None, *, noise=None, generator=None):
