@@ -243,6 +243,26 @@ python scripts/rsl_rl/play_reference.py --headless --device cuda:0 \
 默认 `policy` 使用实时 DINO + flow。运行配置只在这个入口禁用依赖原动作参考的 termination、
 固定初始化 clip、不做周期 motion reset，保留 timeout 和独立跌倒/非有限状态停止；不是任务成功指标。
 
+批量评估并录像（默认遍历目录下所有 step checkpoint 和初始化 NPZ 中的所有 clip）：
+
+```bash
+/data/g1_hoi_ws/sim51/bin/python scripts/rsl_rl/batch_play_reference.py \
+  --reference-root outputs/reference_train_100000_dual_10_11 \
+  --reference-file data/test/floorlamp_033_var5.npz \
+  --checkpoint logs/rsl_rl/g1_inspire_hoi/2026-08-19_10-29-31_multi-obj-test/model_31400.pt \
+  --dino-repo /data/g1_hoi_ws/dinov2 \
+  --output outputs/reference_eval_batch_100000_dual_10_11
+```
+
+可加 `--steps 60000,70000 --clips 0-4` 限定范围。`--repeats 10` 会对每个
+checkpoint/clip 组合运行 10 次，依次使用 `--seed` 指定的初始种子（默认 42）及后续种子；
+例如 2 个 checkpoint、5 个 clip、10 次重复共 100 次评估。`--dry-run` 仅显示待运行命令。
+结果写入 `summary.csv` 和 `summary.json`，每次评估的日志和 MP4 保存在各自目录，
+成功录像的链接集中在 `successful_videos/`，可直接用视频播放器打开。批量脚本会跳过已完成的结果；
+中断的结果保留在原目录，并使用 `_retryN` 新目录重试。
+这里的 `success` 指动作片段走到 `clip_end` 且未触发跌倒/非有限状态终止；
+它不衡量抓取质量或物体轨迹误差，最终效果仍需回放录像检查。
+
 ## 验证
 
 ```bash

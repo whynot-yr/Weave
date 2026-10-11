@@ -31,6 +31,7 @@ parser.add_argument("--dino-repo")
 parser.add_argument("--dino-weights")
 parser.add_argument("--dino-ref", default="main")
 parser.add_argument("--output", type=Path)
+parser.add_argument("--video", action="store_true", help="Record a scene-view MP4 for each episode")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args, hydra_args = parser.parse_known_args()
@@ -55,6 +56,7 @@ launcher = AppLauncher(args)
 simulation_app = launcher.app
 
 import time
+import subprocess
 
 import g1_hoi_learning.tasks  # noqa: F401
 import gymnasium as gym
@@ -62,6 +64,7 @@ import numpy as np
 import torch
 import yaml
 from g1_hoi_learning.rollout.reference_play_config import configure_reference_play
+from g1_hoi_learning.tasks.hoi.mdp.terminations import motion_clip_end
 from rsl_rl.runners import OnPolicyRunner
 from weave_policy.config import ReferencePolicyConfig
 from weave_policy.data.reference_codec import ReferenceBuffer
@@ -69,9 +72,40 @@ from weave_policy.predictor import ReferencePredictor
 from weave_policy.weave_adapter import check_environment, replay_reference
 
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from isaaclab.managers import TerminationTermCfg
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
+
+
+class SceneVideo:
+    def __init__(self, path: Path, fps: int):
+        self.path = path
+        self.fps = fps
+        self.process = None
+
+    def capture(self, env):
+        frame = np.asarray(env.render())
+        if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
+            raise ValueError(f"Unexpected render frame shape: {frame.shape}")
+        frame = np.ascontiguousarray(frame[..., :3], dtype=np.uint8)
+        if self.process is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            height, width = frame.shape[:2]
+            self.process = subprocess.Popen([
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size", f"{width}x{height}",
+                "-framerate", str(self.fps), "-i", "-", "-an", "-c:v", "libx264",
+                "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", str(self.path),
+            ], stdin=subprocess.PIPE)
+        self.process.stdin.write(frame.tobytes())
+
+    def close(self):
+        if self.process is not None:
+            self.process.stdin.close()
+            if self.process.wait() != 0:
+                raise RuntimeError(f"ffmpeg failed to encode {self.path}")
+            self.process = None
 
 
 @hydra_task_config(args.task, args.agent)
@@ -105,6 +139,9 @@ def main(env_cfg, agent_cfg):
     adjustments = configure_reference_play(
         env_cfg, args.reference_file, args.clip_id, recorded_camera, args.episode_seconds, args.min_pelvis_height
     )
+    env_cfg.terminations.clip_end = TerminationTermCfg(
+        func=motion_clip_end, params={"command_name": "motion"}, time_out=True
+    )
     buffer = ReferenceBuffer(config.reference_offsets, args.replan_steps)
     predictor = None
     if args.reference_source == "policy":
@@ -120,7 +157,8 @@ def main(env_cfg, agent_cfg):
         "adjustments": adjustments,
     }
     (args.output / "run_config.json").write_text(json.dumps(run, indent=2, default=str))
-    env = RslRlVecEnvWrapper(gym.make(args.task, cfg=env_cfg), clip_actions=agent_cfg.clip_actions)
+    gym_env = gym.make(args.task, cfg=env_cfg, render_mode="rgb_array" if args.video else None)
+    env = RslRlVecEnvWrapper(gym_env, clip_actions=agent_cfg.clip_actions)
     try:
         raw = env.unwrapped
         check_environment(raw, config, metadata["source_info"])
@@ -133,11 +171,17 @@ def main(env_cfg, agent_cfg):
         obs, _ = env.reset()
         ppo_nn.reset()
         episode, step = 0, 0
+        results = []
+        video = None
 
         def begin_episode():
+            nonlocal video
             buffer.reset()
             raw.sim.render()
             camera.update(0.0, force_recompute=True)
+            if args.video:
+                video = SceneVideo(args.output / "videos" / f"episode_{episode:03d}.mp4",
+                                   round(1.0 / raw.step_dt))
 
         begin_episode()
         with (args.output / "trace.jsonl").open("x") as trace, torch.inference_mode():
@@ -171,8 +215,28 @@ def main(env_cfg, agent_cfg):
                 actions = ppo(actor_obs)
                 if actions.shape != (1, 41) or not torch.isfinite(actions).all():
                     raise FloatingPointError("Invalid PPO action")
+                if video is not None:
+                    video.capture(gym_env)
                 obs, _, dones, _ = env.step(actions)
                 ppo_nn.reset(dones)
+                done = bool(dones[0])
+                reason = None
+                success = False
+                if done:
+                    term_mgr = raw.termination_manager
+                    terminated = bool(raw.reset_terminated[0])
+                    flags = {name: term_mgr.get_term(name) for name in term_mgr.active_terms}
+                    success = bool(flags["clip_end"][0]) and not terminated
+                    if success:
+                        reason = "clip_end"
+                    elif terminated:
+                        reason = next(
+                            (name for name in term_mgr.active_terms
+                             if not term_mgr.get_term_cfg(name).time_out and bool(flags[name][0])),
+                            "unknown",
+                        )
+                    else:
+                        reason = "time_out"
                 trace.write(
                     json.dumps(
                         {
@@ -180,7 +244,9 @@ def main(env_cfg, agent_cfg):
                             "step": step,
                             "total_step": total,
                             "prediction_ms": prediction_ms,
-                            "done": bool(dones[0]),
+                            "done": done,
+                            "success": success if done else None,
+                            "reason": reason,
                             "action_abs_max": float(actions.abs().max()),
                         }
                     )
@@ -188,14 +254,30 @@ def main(env_cfg, agent_cfg):
                 )
                 trace.flush()
                 step += 1
-                if bool(dones[0]):
+                if done:
+                    if video is not None:
+                        video.close()
+                        video = None
+                    results.append({"episode": episode, "steps": step, "success": success, "reason": reason})
                     episode += 1
                     if episode >= args.episodes:
                         break
                     step = 0
                     begin_episode()
+        if episode < args.episodes:
+            if video is not None:
+                video.close()
+                video = None
+            results.append({"episode": episode, "steps": step, "success": False, "reason": "max_steps_or_sim_closed"})
+        (args.output / "results.json").write_text(json.dumps({
+            "episodes": results,
+            "num_success": sum(item["success"] for item in results),
+            "num_episodes": len(results),
+        }, indent=2))
         print(f"Reference rollout trace: {args.output / 'trace.jsonl'}", flush=True)
     finally:
+        if 'video' in locals() and video is not None:
+            video.close()
         env.close()
 
 
