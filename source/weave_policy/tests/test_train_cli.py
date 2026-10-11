@@ -10,10 +10,10 @@ import h5py
 import numpy as np
 import pytest
 import torch
+from torch.utils.data import DistributedSampler
 from weave_policy.data.normalization import compute_statistics
 from weave_policy.data.reference_dataset import ReferenceWindowDataset, inspect_source
 from weave_policy.data.split import make_split
-from torch.utils.data import DistributedSampler
 
 SCRIPTS = Path(__file__).resolve().parents[3] / "scripts/reference_policy"
 
@@ -84,9 +84,9 @@ def test_training_resume_and_inference(source, tmp_path, device):
     result = tmp_path / "prediction.npz"
     run("infer.py", "--checkpoint", resumed / "step_00000002", "--feature-cache", cache, "--output", result)
     with np.load(result) as f:
-        assert f["reference"].shape == (1, 10, 125)
-        assert f["ref_robot"].shape == (1, 10, 62)
-        assert f["ref_object"].shape == (1, 10, 63)
+        assert f["reference"].shape == (1, 5, 125)
+        assert f["ref_robot"].shape == (1, 5, 62)
+        assert f["ref_object"].shape == (1, 5, 63)
         assert np.isfinite(f["reference"]).all()
 
 

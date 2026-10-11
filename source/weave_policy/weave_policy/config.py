@@ -7,8 +7,8 @@ from dataclasses import asdict, dataclass
 @dataclass(frozen=True)
 class ReferencePolicyConfig:
     reference_dim: int = 125
-    horizon: int = 10
-    reference_offsets: tuple[int, ...] = tuple(range(0, 50, 5))
+    horizon: int = 5
+    reference_offsets: tuple[int, ...] = (0, 5, 10, 15, 20)
     fps: float = 50.0
     width: int = 768
     image_dim: int = 768
@@ -28,10 +28,10 @@ class ReferencePolicyConfig:
     protocol: str = "weave-reference-flow-v1"
 
     def __post_init__(self):
-        if self.reference_dim != 125 or self.horizon != 10:
-            raise ValueError("The reference protocol requires 10 tokens of 125 dimensions")
-        if len(self.reference_offsets) != 10 or self.reference_offsets[0] != 0:
-            raise ValueError("Expected 10 reference offsets starting at zero")
+        if self.reference_dim != 125 or self.horizon != 5:
+            raise ValueError("The reference protocol requires 5 tokens of 125 dimensions")
+        if len(self.reference_offsets) != self.horizon or self.reference_offsets[0] != 0:
+            raise ValueError("Expected 5 reference offsets starting at zero")
         if any(type(x) is not int or x < 0 for x in self.reference_offsets):
             raise ValueError("Reference offsets must be nonnegative integers")
         if any(a >= b for a, b in zip(self.reference_offsets, self.reference_offsets[1:])):

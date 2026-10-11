@@ -33,7 +33,7 @@ def test_windows_mask_anchor_and_split(source, tmp_path):
     assert set(split["train_episodes"]) in ({0, 1}, {2, 3})
     ds = ReferenceWindowDataset(source, split["train_episodes"])
     first, last = ds.numeric_item(0), ds.numeric_item(11)
-    assert first["reference_mask"][:, 0].tolist() == [True] * 3 + [False] * 7
+    assert first["reference_mask"][:, 0].tolist() == [True] * 3 + [False] * 2
     torch.testing.assert_close(first["reference"][:3, 53], torch.tensor([0.0, 0.5, 1.0]))
     assert last["reference_mask"].sum() == 125
     assert last["reference"][0, 53] == 0
@@ -56,7 +56,7 @@ def test_normalization_contacts_and_constant(statistics, mode):
     statistics["statistics"]["q01"][0] = statistics["statistics"]["q99"][0] = 0.3
     statistics["statistics"]["mean"][0], statistics["statistics"]["std"][0] = 0.3, 0
     norm = ReferenceNormalizer(statistics, mode)
-    value = torch.full((1, 10, 125), 0.5)
+    value = torch.full((1, 5, 125), 0.5)
     value[..., 0] = 0.3
     value[..., 71:] = torch.arange(54) % 3 - 1
     normalized = norm.normalize(value)
@@ -67,7 +67,7 @@ def test_normalization_contacts_and_constant(statistics, mode):
 
 def test_flow_objective_mask_and_euler(statistics):
     policy = FlowMatchingPolicy(tiny_config(), statistics)
-    images, reference = torch.randn(2, 257, 768), torch.rand(2, 10, 125)
+    images, reference = torch.randn(2, 257, 768), torch.rand(2, 5, 125)
     noise, time = torch.randn_like(reference), torch.tensor([0.25, 0.75])
     mask = torch.zeros_like(reference)
     mask[:, :2] = 1
@@ -91,7 +91,7 @@ def test_flow_objective_mask_and_euler(statistics):
 
 def test_training_checkpoint_and_predictor(statistics, tmp_path):
     policy = FlowMatchingPolicy(tiny_config(), statistics)
-    images, refs = torch.randn(1, 257, 768), torch.randn(1, 10, 125)
+    images, refs = torch.randn(1, 257, 768), torch.randn(1, 5, 125)
     result = policy(images, refs, torch.ones_like(refs))
     result["loss"].backward()
     assert policy.reference_encoder.W1.W.grad is not None
@@ -126,14 +126,16 @@ def test_rotation_reanchor_and_ppo_layout(source):
     actual = reanchor_reference(selected, pos, quat, new_pos, new_quat)
     inverse = matrix_from_quat(new_quat).T
     torch.testing.assert_close(actual[..., 53:56], (inverse @ (selected[..., 53:56] - new_pos).T).T)
-    projected = matrix_from_rot6d(sanitize_reference(torch.zeros(10, 125))[..., 56:62])
-    torch.testing.assert_close(projected.transpose(-1, -2) @ projected, torch.eye(3).expand(10, 3, 3))
+    projected = matrix_from_rot6d(sanitize_reference(torch.zeros(5, 125))[..., 56:62])
+    torch.testing.assert_close(projected.transpose(-1, -2) @ projected, torch.eye(3).expand(5, 3, 3))
     assert (torch.linalg.det(projected) > 0.999).all()
     groups = ppo_reference_groups(selected)
     assert groups["ref_motion_body"].shape == (310,)
     torch.testing.assert_close(groups["ref_motion_body"][:265], selected[:, :53].flatten())
     assert groups["ref_motion_object"].shape == (315,)
-    buffer = ReferenceBuffer(range(0, 50, 5))
+    buffer = ReferenceBuffer(range(0, 25, 5))
+    with pytest.raises(ValueError, match="prediction ends at 20"):
+        ReferenceBuffer(range(0, 25, 5), replan_steps=2)
     buffer.install(refs, pos, quat, 0)
     torch.testing.assert_close(buffer.groups(pos, quat, 0)["ref_motion_body"][0], groups["ref_motion_body"])
     with pytest.raises(RuntimeError, match="expired"):

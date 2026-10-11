@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from ..config import ReferencePolicyConfig
 from .reference_codec import encode_reference
 
 
@@ -60,7 +61,7 @@ def inspect_source(path):
 
 
 class ReferenceWindowDataset(Dataset):
-    def __init__(self, source, episodes, offsets=tuple(range(0, 50, 5)), features=None):
+    def __init__(self, source, episodes, offsets=ReferencePolicyConfig.reference_offsets, features=None):
         self.info = inspect_source(source)
         self.source = self.info["source"]
         self.episodes = sorted(episodes)
@@ -71,8 +72,12 @@ class ReferenceWindowDataset(Dataset):
         if any(self.info["episodes"][i]["length"] <= 0 for i in self.episodes):
             raise ValueError("Empty episodes cannot form windows")
         self.offsets = torch.tensor(offsets, dtype=torch.long)
-        if len(offsets) != 10 or offsets[0] != 0 or (self.offsets[1:] <= self.offsets[:-1]).any():
-            raise ValueError("Expected ten strictly increasing offsets starting at zero")
+        if (
+            len(offsets) != ReferencePolicyConfig.horizon
+            or offsets[0] != 0
+            or (self.offsets[1:] <= self.offsets[:-1]).any()
+        ):
+            raise ValueError("Expected five strictly increasing offsets starting at zero")
         self.features_path = str(Path(features).resolve()) if features is not None else None
         self.feature_metadata = None
         self.feature_rows = {}

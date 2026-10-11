@@ -140,7 +140,11 @@ class ReferenceBuffer:
     def __init__(self, offsets, replan_steps=1):
         self.offsets = tuple(offsets)
         if replan_steps < 1 or replan_steps - 1 + max(PPO_OFFSETS) > max(offsets):
-            raise ValueError("Replan interval exceeds prediction coverage")
+            raise ValueError(
+                f"replan_steps={replan_steps} needs reference offset "
+                f"{replan_steps - 1 + max(PPO_OFFSETS)}, but the prediction ends at {max(offsets)}; "
+                "use replan_steps=1 for the 5-point reference"
+            )
         self.replan_steps = replan_steps
         self.reset()
 

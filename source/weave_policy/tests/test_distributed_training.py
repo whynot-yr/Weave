@@ -7,7 +7,6 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
-
 from weave_policy.config import ReferencePolicyConfig
 from weave_policy.flow_matching_policy import FlowMatchingPolicy
 from weave_policy.training.distributed import (
@@ -28,11 +27,11 @@ def _gradient_worker(rank, rendezvous, statistics):
         ddp = DDP(policy)
         # Every rank builds identical global inputs; each processes its partition.
         images = torch.randn(4, 257, 768)
-        reference = torch.rand(4, 10, 125)
+        reference = torch.rand(4, 5, 125)
         noise = torch.randn_like(reference)
         time = torch.tensor([0.1, 0.3, 0.6, 0.9])
         mask = torch.zeros_like(reference, dtype=torch.bool)
-        for sample, length in enumerate([10, 1, 4, 2]):
+        for sample, length in enumerate([5, 1, 4, 2]):
             mask[sample, :length] = True
         baseline = FlowMatchingPolicy(config, statistics)
         baseline.load_state_dict(policy.state_dict())
@@ -54,7 +53,9 @@ def _gradient_worker(rank, rendezvous, statistics):
                         noise=noise[sample : sample + 1], time=time[sample : sample + 1],
                     )
                     backward_loss(output["loss_sum"], global_count, 2).backward()
-            expected = baseline(images[indices], reference[indices], active_mask[indices], noise=noise[indices], time=time[indices])
+            expected = baseline(
+                images[indices], reference[indices], active_mask[indices], noise=noise[indices], time=time[indices]
+            )
             (expected["loss_sum"] / expected["valid_count"]).backward()
             for (name, parameter), expected_parameter in zip(policy.named_parameters(), baseline.parameters()):
                 assert parameter.grad is not None, name

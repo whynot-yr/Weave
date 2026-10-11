@@ -9,16 +9,16 @@ WEAVE reference 的维度、图像条件和网络宽度按本项目协议替换�
 | --- | --- |
 | 当前图像 | RGB `uint8[B,224,224,3]`，冻结官方 `dinov2_vitb14`，ImageNet normalization |
 | 图像条件 | CLS + 全部 256 patch，`[B,257,768]`；可训练 LayerNorm |
-| 参考目标 | `ref_robot[B,10,62]` + `ref_object[B,10,63]` → `[B,10,125]` |
+| 参考目标 | `ref_robot[B,5,62]` + `ref_object[B,5,63]` → `[B,5,125]` |
 | Flow Matching | `u~Beta(1.5,1)`，`t=(1-u)*0.999`，`x_t=(1-t)*noise+t*ref`，监督 `ref-noise` |
-| 参考 encoder | category linear `125→768`，离散 time `floor(t*1000)` 广播 10 步，sin/cos `768` |
+| 参考 encoder | category linear `125→768`，离散 time `floor(t*1000)` 广播 5 个参考点，sin/cos `768` |
 | time 融合 | concat `768+768=1536` → category linear `1536→768` → Swish → category linear `768→768` |
-| 序列位置 | 10 个可训练位置 embedding，和参考 token 相加 |
+| 序列位置 | 5 个可训练位置 embedding，和参考 token 相加 |
 | DiT | 16 blocks，16 heads × 48；偶数 block 图像 cross-attention，奇数 block reference self-attention |
 | 每个 block | AdaLN(time) → Q/K/V attention → output projection/dropout → final dropout → residual；LayerNorm → FFN → residual |
 | FFN | Linear `768→3072` → GELU(approximate=tanh) → dropout → Linear `3072→768` → dropout |
 | 全局 time | 独立 256 维 cos/sin → Linear `256→768` → SiLU → Linear `768→768`；用于 AdaLN 和末尾 shift/scale |
-| DiT 输出 | time shift/scale 调制 LayerNorm → Linear `768→768`，`[B,10,768]` |
+| DiT 输出 | time shift/scale 调制 LayerNorm → Linear `768→768`，`[B,5,768]` |
 | decoder | category linear `768→768` → ReLU → category linear `768→125`，预测 flow velocity |
 | 推理 | 4 次 Euler，`t=0,0.25,0.5,0.75`，再反归一化、投影 rot6d、离散 contacts |
 
@@ -27,10 +27,9 @@ object rot6d 6、contact 54。四元数为 `wxyz`；rot6d 是旋转矩阵前两�
 每个预测窗口的所有 pose 都相对**采样时刻实际 pelvis**，位置为直接坐标，不是增量。
 实际 pelvis 只用于构造训练目标以及运行时坐标转换，不作为网络条件输入。
 
-10 个 reference 时间为控制帧 offset `[0,5,10,15,20,25,30,35,40,45]`，默认 50 Hz。
-WEAVE PPO 使用 `[0,5,10,15,20]`；默认 `--replan-steps 1`，直接取前 5 个 token。
-更大的 replan 间隔使用位置/关节线性插值、rot6d 线性插值后投影、contact 最近邻，属于粗时间网格近似；
-缓存轨迹始终保留预测时 pelvis anchor，然后转换到当前 pelvis frame。
+5 个 reference 时间为控制帧 offset `[0,5,10,15,20]`，默认 50 Hz，与 WEAVE PPO 的参考时间一致。
+`--replan-steps` 必须为 1：每个控制步重新预测，才能覆盖 PPO 所需的最远 offset 20。
+缓存轨迹保留预测时 pelvis anchor，并在传给 PPO 前转换到当前 pelvis frame。
 
 归一化三种模式：
 
@@ -88,7 +87,7 @@ python scripts/reference_policy/split_dataset.py \
   datasets/floorlamp_rollout_100_seed42/rollouts.h5 outputs/reference_split.json
 
 python scripts/reference_policy/compute_stats.py \
-  datasets/floorlamp_rollout_100_seed42/rollouts.h5 outputs/reference_stats.json \
+  datasets/floorlamp_rollout_100_seed42/rollouts.h5 outputs/reference_stats_5.json \
   --split outputs/reference_split.json
 
 python scripts/reference_policy/encode_images.py \
@@ -97,10 +96,13 @@ python scripts/reference_policy/encode_images.py \
 
 python scripts/reference_policy/train.py \
   --source datasets/floorlamp_rollout_100_seed42/rollouts.h5 \
-  --split outputs/reference_split.json --stats outputs/reference_stats.json \
+  --split outputs/reference_split.json --stats outputs/reference_stats_5.json \
   --features outputs/reference_dino.h5 --output outputs/reference_train \
   --device cuda:0 --amp --batch-size 32 --steps 100000
 ```
+
+从旧版 10 点目标切换时，可复用同一原始 HDF5、motion-family split 和 DINO 图像 token 缓存；
+必须用新的 5 点配置重新运行 `compute_stats.py`，并使用新的统计文件从头训练。
 
 不传 `--features` 时，每次读取当前 RGB，由冻结 DINO 编码，需传 `--dino-repo`。
 缓存使用 float16，不包含 robot state。100 条、36,365 帧数据的全部 token 未压缩约 13.4 GiB。
@@ -116,7 +118,7 @@ scheduler、step 和 RNG。恢复需维持相同训练预算、batch、seed、�
 ```bash
 python scripts/reference_policy/train.py \
   --source datasets/floorlamp_rollout_100_seed42/rollouts.h5 \
-  --split outputs/reference_split.json --stats outputs/reference_stats.json \
+  --split outputs/reference_split.json --stats outputs/reference_stats_5.json \
   --features outputs/reference_dino.h5 --device cuda:0 --amp --batch-size 32 --steps 100000 \
   --resume outputs/reference_train/step_00010000 --output outputs/reference_resume
 ```
@@ -132,7 +134,7 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nnodes=1 --nproc-per-node=2 \
   scripts/reference_policy/train.py \
   --source datasets/floorlamp_rollout_100_seed42/rollouts.h5 \
-  --split outputs/reference_split.json --stats outputs/reference_stats.json \
+  --split outputs/reference_split.json --stats outputs/reference_stats_5.json \
   --features outputs/reference_dino.h5 --output outputs/reference_ddp \
   --batch-size 16 --gradient-accumulation-steps 1 \
   --workers 4 --amp --steps 100000
@@ -192,7 +194,7 @@ HDF5 在 DataLoader worker 内打开；使用 `spawn`，不会继承父进程打
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
   --standalone --nnodes=1 --nproc-per-node=2 scripts/reference_policy/train.py \
   --source datasets/floorlamp_rollout_100_seed42/rollouts.h5 \
-  --split outputs/reference_split.json --stats outputs/reference_stats.json \
+  --split outputs/reference_split.json --stats outputs/reference_stats_5.json \
   --features outputs/reference_dino.h5 --batch-size 16 --amp --steps 100000 \
   --resume outputs/reference_ddp/step_00010000 --output outputs/reference_ddp_resume
 ```
@@ -216,7 +218,7 @@ python scripts/reference_policy/infer.py \
   --dino-repo /data/g1_hoi_ws/dinov2 --device cuda:0 --output outputs/reference_rgb_prediction.npz
 ```
 
-输出 NPZ 包含物理量 `reference[B,10,125]`、`ref_robot[B,10,62]`、`ref_object[B,10,63]`、offsets 和 fps。
+输出 NPZ 包含物理量 `reference[B,5,125]`、`ref_robot[B,5,62]`、`ref_object[B,5,63]`、offsets 和 fps。
 decoder 本身输出的是 velocity；Euler 积分、反归一化之后才是这些物理参考轨迹。
 
 在 Isaac 环境中启动：

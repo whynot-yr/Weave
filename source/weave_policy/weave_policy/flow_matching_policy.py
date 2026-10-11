@@ -65,7 +65,7 @@ class FlowMatchingPolicy(nn.Module):
         images = self._images(image_tokens)
         shape = (len(images), self.config.horizon, self.config.reference_dim)
         if reference.shape != shape or reference_mask.shape != shape:
-            raise ValueError("Expected reference and mask [B,10,125]")
+            raise ValueError(f"Expected reference and mask [B,{self.config.horizon},{self.config.reference_dim}]")
         reference = reference.to(self.device, dtype=torch.float32)
         mask = reference_mask.to(self.device, dtype=torch.float32)
         if not torch.isfinite(mask).all() or not ((mask == 0) | (mask == 1)).all():
