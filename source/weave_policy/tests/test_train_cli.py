@@ -81,6 +81,7 @@ def test_training_resume_and_inference(source, tmp_path, device):
     actual = torch.load(resumed / "step_00000002/model.pt", weights_only=True)
     for key in expected:
         torch.testing.assert_close(actual[key], expected[key], atol=0, rtol=0)
+
     result = tmp_path / "prediction.npz"
     run("infer.py", "--checkpoint", resumed / "step_00000002", "--feature-cache", cache, "--output", result)
     with np.load(result) as f:
@@ -88,6 +89,51 @@ def test_training_resume_and_inference(source, tmp_path, device):
         assert f["ref_robot"].shape == (1, 5, 62)
         assert f["ref_object"].shape == (1, 5, 63)
         assert np.isfinite(f["reference"]).all()
+
+
+def test_train_only_uses_every_episode_without_validation(source, tmp_path):
+    stats_path = tmp_path / "all_stats.json"
+    cache = tmp_path / "cache.h5"
+    with h5py.File(source, "r+") as file:
+        file["episodes/clip_name"][:] = np.array(
+            [f"a_v{i}" for i in range(4)], dtype=h5py.string_dtype()
+        )
+    run("compute_stats.py", source, stats_path, "--all-episodes")
+    stats = json.loads(stats_path.read_text())
+    assert stats["train_episodes"] == [0, 1, 2, 3]
+    assert stats == json.loads(json.dumps(compute_statistics(ReferenceWindowDataset(source, range(4)))))
+
+    with h5py.File(cache, "w") as file:
+        file.attrs.update(
+            complete=True,
+            source_id=inspect_source(source)["source_id"],
+            encoder_json=json.dumps({"encoder_id": "test-fixture"}),
+        )
+        file.create_dataset("tokens", shape=(48, 257, 768), dtype="f2", compression="lzf")
+        file["episode_index"] = np.repeat(np.arange(4), 12)
+        file["frame_index"] = np.tile(np.arange(12), 4)
+
+    args = [
+        "--source", source, "--train-only", "--stats", stats_path, "--features", cache,
+        "--device", "cpu", "--workers", "0", "--steps", "2", "--batch-size", "2",
+        "--save-every", "1", "--eval-every", "1", "--smoke",
+    ]
+    continuous, resumed = tmp_path / "all_continuous", tmp_path / "all_resumed"
+    run("train.py", *args, "--output", continuous)
+    run("train.py", *args, "--resume", continuous / "step_00000001", "--output", resumed)
+    records = [json.loads(line) for line in (continuous / "metrics.jsonl").read_text().splitlines()]
+    assert len(records) == 2 and all("val_loss" not in record for record in records)
+    expected = torch.load(continuous / "step_00000002/model.pt", weights_only=True)
+    actual = torch.load(resumed / "step_00000002/model.pt", weights_only=True)
+    for key in expected:
+        torch.testing.assert_close(actual[key], expected[key], atol=0, rtol=0)
+
+    distributed = tmp_path / "all_distributed"
+    run_distributed(*args, "--output", distributed)
+    ddp_records = [json.loads(line) for line in (distributed / "metrics.jsonl").read_text().splitlines()]
+    assert len(ddp_records) == 2 and all("val_loss" not in record for record in ddp_records)
+    metadata = json.loads((distributed / "step_00000002/metadata.json").read_text())
+    assert metadata["training_signature"]["world_size"] == 2
 
 
 def run_distributed(*args):

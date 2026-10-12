@@ -16,7 +16,7 @@ from _common import read_config, write_new_json
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from weave_policy.data.normalization import load_statistics
-from weave_policy.data.reference_dataset import ReferenceWindowDataset
+from weave_policy.data.reference_dataset import ReferenceWindowDataset, inspect_source
 from weave_policy.data.split import load_split
 from weave_policy.flow_matching_policy import FlowMatchingPolicy
 from weave_policy.models.dinov2_encoder import DinoV2Encoder
@@ -30,7 +30,8 @@ from weave_policy.training.distributed import (
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True)
-    parser.add_argument("--split", required=True)
+    parser.add_argument("--split", help="Train/validation split; omitted with --train-only")
+    parser.add_argument("--train-only", action="store_true", help="Train on every episode without validation")
     parser.add_argument("--stats", required=True)
     parser.add_argument("--features", help="Full DINOv2 cache; otherwise encode RGB during training")
     parser.add_argument("--config")
@@ -61,6 +62,10 @@ def parse_args():
         parser.error("--amp requires CUDA")
     if args.resume and args.init_checkpoint:
         parser.error("Choose --resume or --init-checkpoint")
+    if args.train_only and args.split:
+        parser.error("--split cannot be used with --train-only")
+    if not args.train_only and not args.split:
+        parser.error("--split is required unless --train-only is set")
     return args
 
 
@@ -96,9 +101,22 @@ def train_run(args, context):
     config = read_config(args.config)
     if args.smoke:
         config = replace(config, width=96, num_heads=2, head_dim=48, num_layers=2)
-    split = load_split(args.split, args.source)
+    if args.train_only:
+        info = inspect_source(args.source)
+        split = {
+            "mode": "train_only",
+            "source_id": info["source_id"],
+            "train_episodes": list(range(len(info["episodes"]))),
+            "val_episodes": [],
+        }
+    else:
+        split = load_split(args.split, args.source)
     train = ReferenceWindowDataset(args.source, split["train_episodes"], config.reference_offsets, args.features)
-    evaluation = ReferenceWindowDataset(args.source, split["val_episodes"], config.reference_offsets, args.features)
+    evaluation = None
+    if not args.train_only:
+        evaluation = ReferenceWindowDataset(
+            args.source, split["val_episodes"], config.reference_offsets, args.features
+        )
     metrics = None
     try:
         if abs(train.info["metadata"]["fps"] - config.fps) > 1e-6:
@@ -315,7 +333,7 @@ def train_run(args, context):
                     "valid_elements": global_count.item(), "microbatches": len(window),
                     "lr": scheduler.get_last_lr()[0], "grad_norm": float(grad_norm),
                 }
-                if step % args.eval_every == 0:
+                if not args.train_only and step % args.eval_every == 0:
                     record.update(evaluate())
 
                 def log_record():
@@ -343,7 +361,8 @@ def train_run(args, context):
         if metrics is not None:
             metrics.close()
         train.close()
-        evaluation.close()
+        if evaluation is not None:
+            evaluation.close()
 
 
 def main():
