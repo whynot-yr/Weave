@@ -1,0 +1,32 @@
+# Standalone configuration: scripts/dagger/train.py --config configs/dagger/train.yaml
+# Teacher run params/agent.yaml and params/env.yaml are discovered alongside the checkpoint.
+teacher:
+  checkpoint: null
+  agent_config: null
+  env_config: null
+
+training:
+  seed: 42
+  num_envs: 32
+  rollout_steps: 32
+  batch_size: 256
+  updates_per_iteration: 20
+  buffer_capacity: 50000
+  current_fraction: 0.5
+  visual_warmup_iterations: 500
+  joint_warmup_iterations: 500
+  decay_iterations: 5000
+  student_iterations: 5000
+  cnn_lr: 0.0001
+  transferred_lr: 0.00001
+  weight_decay: 0.0001
+  max_grad_norm: 1.0
+  save_interval: 100
+  log_interval: 10
+
+# Inherit teacher scene, actions, observations, references, rewards, and randomizations.
+# Allowed overrides: motion files/RSI/debug_vis, events, and proprio corruption.
+env_overrides:
+  commands:
+    motion:
+      rsi: true

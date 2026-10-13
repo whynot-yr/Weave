@@ -1,0 +1,4 @@
+# Evaluate one object at a time; clips are processed in camera batches to bound GPU memory.
+num_envs: 32
+seed: 42
+motion_files: null  # Prefer an explicit held-out single-object file via --motion_files.
