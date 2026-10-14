@@ -38,6 +38,72 @@ The YAML is **not** a Hydra config. Edit `training` in
 `--max_iterations`. The latter limits this invocation without changing the
 configured total iterations, for a short smoke run followed by resume.
 
+## 双卡 DDP
+
+`num_envs` 和 `micro_batch_size` 始终表示**每张卡／每个 rank**的数量。
+默认配置保持每卡 4096 个环境，双卡合计 8192 个环境，不自动平分环境数。
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/dagger/train_ddp.sh \
+  --config configs/dagger/train.yaml \
+  --teacher_checkpoint /path/to/teacher/run/model_2000.pt \
+  --motion_files /path/to/training_motions.npz
+```
+
+也可以直接启动：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.run \
+  --standalone --nnodes=1 --nproc-per-node=2 \
+  scripts/dagger/train.py --distributed \
+  --teacher_checkpoint /path/to/teacher/run/model_2000.pt
+```
+
+设置 `PYTHON=/path/to/python` 可选择启动脚本使用的解释器，运行前仍需初始化
+Isaac Sim 环境。直接 torchrun 启动时，检测到 `WORLD_SIZE > 1` 会自动启用 DDP；
+单独传 `--distributed` 不会启动第二个进程。
+
+每张卡有独立的 SimulationApp、环境、相机、冻结 teacher、student、AdamW 和当前
+rollout。AppLauncher 在创建仿真前按 `LOCAL_RANK` 绑定物理计算和渲染设备。
+初始 student 权重统一；环境和 minibatch 使用 `seed + rank` 的独立随机流。
+两卡并行采集 16 步，再并行训练；训练期间两边暂停采样。
+
+| 默认配置 | 每卡 | 双卡全局 |
+|---|---:|---:|
+| 环境 | 4096 | 8192 |
+| 每窗口样本 | 65,536 | 131,072 |
+| 每次更新有效样本 | 2048 | 4096 |
+| microbatch | 128 | 两边独立处理 |
+| 每个 minibatch 累积次数 | 16 | — |
+| 每个 epoch 同步更新次数 | 32 | 32 |
+| 两个 epoch 同步更新次数 | 64 | **64** |
+
+每卡只遍历自己的当前 rollout，不对本地数据再做 DistributedSampler 分片。
+深度图不跨卡传输；student 的 CNN/SimBa 梯度由 DDP 汇总。前 15 个 microbatch 的
+forward/backward 包在 `no_sync()` 中，最后一个同步累计梯度，再裁剪、更新。
+两卡本地 minibatch 大小一致，局部平均损失按 microbatch 样本比例加权后，
+DDP 的梯度平均就是全局平均；不再额外除以卡数。学习率不随卡数自动调整。
+
+运行目录由 rank 0 创建并广播。只有 rank 0 写 TensorBoard、metrics、参数、
+checkpoint 和导出；仿真日志在各自的 `rank_<rank>/simulation/` 下。
+指标记录全局样本/误差/reward/done，以及 `rank_resources` 中的每卡耗时、
+RAM/CUDA 峰值；顶层耗时和内存指标取各卡最大值。更新计数不乘卡数。
+任一卡关闭仿真时，两边协调停止；采样、数据解码和写入的 Python 错误会通知同伴。
+
+checkpoint 包含 `world_size` 和各 rank 的 RNG、episode 计数；模型使用原始参数名，
+无 `module.` 前缀，可继续用单卡评估入口。严格 resume 保持相同卡数、每卡环境数
+和训练配置：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/dagger/train_ddp.sh \
+  --resume logs/dagger/<run>/model_100.pt
+```
+
+从现有单卡权重开始双卡训练，使用 `--student_checkpoint` 创建新训练，
+重新建立优化器和计数；不把单卡训练进度直接当作双卡 resume。
+早期单卡 v2 checkpoint 仍支持单卡恢复。仿真物理状态依然不序列化。
+
 ## Network and observations
 
 ```text
@@ -61,7 +127,7 @@ Future object references and anchor-frame reference calculations are retained.
 
 ## Online training loop
 
-This is a **single-process, single-GPU synchronous loop**:
+The same synchronous loop runs on one GPU, or independently on each DDP rank:
 
 1. Execute student mean actions for `rollout_steps`, with parameters fixed.
 2. Label every pre-action state using the frozen teacher mean action.
@@ -77,12 +143,12 @@ current window retained rather than classical accumulated-dataset DAgger.
 
 | Default setting | Value |
 |---|---:|
-| Environments | 4096 |
+| Environments per rank | 4096 |
 | Steps per window | 16 |
-| Samples per window | 65,536 |
+| Samples per window per rank | 65,536 |
 | Epochs per window | 2 |
 | Minibatches per epoch | 32 |
-| Effective samples per minibatch | 2,048 |
+| Effective samples per minibatch per rank | 2,048 |
 | Microbatch size | 128 |
 | Backwards accumulated per optimizer update | 16 |
 | Optimizer updates per window | 64 |
@@ -101,8 +167,8 @@ enter the loss. The environment retains action clipping, scaling, offsets and
 mimic joints; `last_action` reflects the action actually executed. AdamW learning
 rates are 1e-4 for CNN and 1e-5 for SimBa, with gradient norm clipped to 1.0.
 
-CPU storage is preallocated once and reused every window, avoiding a full
-concatenation copy. Depth is uint16 (2 GiB at the default sample count), alongside
+CPU storage on each rank is preallocated once and reused every window, avoiding a full
+concatenation copy. Depth is uint16 (2 GiB per rank at the default sample count), alongside
 vectors, raw teacher actions and clip/episode/step metadata. Failed trajectories
 are retained in the current window. CNN features are recomputed during training.
 
@@ -130,7 +196,7 @@ Runs default to `logs/dagger/<timestamp>/` and contain:
 - `tensorboard/`, `metrics.jsonl`: rollout/train MSE, gradient norm, samples,
   optimizer update counts, rewards/resets, rollout/training times and peak memory.
 - `model_<completed_iterations>.pt`: v2 student, AdamW, iteration/sample/update
-  counters, RNG states and teacher identity; no rollout or historical replay.
+  counters, world size, per-rank RNG/episode states and teacher identity; no rollout or historical replay.
 - `student_weights.pt`: lightweight evaluation/warm-start weights at invocation end.
 - `student_policy.pt`: student-only TorchScript export at invocation end.
 
@@ -143,7 +209,7 @@ python scripts/dagger/train.py --resume logs/dagger/<run>/model_100.pt
 tensorboard --logdir logs/dagger
 ```
 
-Resume uses the saved training configuration/environment and checks teacher SHA256
+Resume requires the same world size, uses the saved training configuration/environment and checks teacher SHA256
 and actor/action/observation contracts. Physics is not serialized: resume starts
 new episodes while retaining learning state. Snapshots occur only at completed
 rollout/update boundaries. Restart interrupted partial iterations from the last

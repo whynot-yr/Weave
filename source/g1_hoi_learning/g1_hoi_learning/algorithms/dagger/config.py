@@ -7,7 +7,7 @@ from dataclasses import dataclass
 @dataclass
 class DaggerTrainConfig:
     seed: int = 42
-    num_envs: int = 4096
+    num_envs: int = 4096  # Per rank; DDP does not divide this count between devices.
     rollout_steps: int = 16
     num_learning_epochs: int = 2
     num_mini_batches: int = 32

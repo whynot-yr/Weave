@@ -511,3 +511,57 @@ def test_partial_rollout_does_not_update_or_save(spec, teacher, observations, tm
     runner.learn(observations, is_running=lambda: len(runner.env.actions) < 1)
     assert runner.iteration == 0 and runner.total_optimizer_updates == 0
     assert not list(tmp_path.glob("*.pt"))
+
+
+def test_earlier_single_rank_v2_checkpoint_still_resumes(spec, teacher, observations, tmp_path):
+    runner = DaggerRunner(
+        FakeEnv(observations),
+        teacher,
+        StudentWeaveActor(spec),
+        small_config(),
+        str(tmp_path),
+        {"sha256": "fixture"},
+        {},
+        {},
+    )
+    runner.save(tmp_path / "new.pt")
+    state = torch.load(tmp_path / "new.pt", weights_only=False)
+    state.update(state.pop("rank_states")[0])
+    state.pop("world_size")
+    state.pop("distributed_state_version")
+    state["rng"]["cuda"] = []
+    torch.save(state, tmp_path / "earlier.pt")
+    runner.load(str(tmp_path / "earlier.pt"))
+    assert runner.iteration == 0 and runner.total_optimizer_updates == 0
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+def test_torchrun_binds_local_device_before_simulation_app_starts(monkeypatch, rank):
+    import sys
+    import types
+    from pathlib import Path
+
+    observed = {}
+
+    class Launcher:
+        @staticmethod
+        def add_app_launcher_args(parser):
+            parser.add_argument("--device", default="cuda:0")
+
+        def __init__(self, args):
+            observed.update(device=args.device, distributed=args.distributed, cameras=args.enable_cameras)
+            self.app = object()
+
+    parent = types.ModuleType("isaaclab")
+    parent.__path__ = []
+    module = types.ModuleType("isaaclab.app")
+    module.AppLauncher = Launcher
+    monkeypatch.setitem(sys.modules, "isaaclab", parent)
+    monkeypatch.setitem(sys.modules, "isaaclab.app", module)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", str(rank))
+    monkeypatch.setattr(sys, "argv", ["train.py", "--device", "cuda:0"])
+    path = Path(__file__).resolve().parents[4] / "scripts/dagger/train.py"
+    prefix = path.read_text().split("import g1_hoi_learning.tasks", 1)[0]
+    exec(compile(prefix, str(path), "exec"), {})
+    assert observed == {"device": f"cuda:{rank}", "distributed": True, "cameras": True}
