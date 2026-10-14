@@ -120,12 +120,15 @@ class StudentWeaveActor(nn.Module):
     def train(self, mode: bool = True):
         super().train(mode)
         self.vector_normalizers.eval()
+        self.vector_encoders.eval()
         return self
 
-    def set_visual_only(self, visual_only: bool):
+    def set_dagger_trainable(self):
+        """Adapt CNN and SimBa while retaining the transferred vector branches."""
         self.depth_encoder.requires_grad_(True)
-        self.vector_encoders.requires_grad_(not visual_only)
-        self.backbone.requires_grad_(not visual_only)
+        self.vector_encoders.requires_grad_(False)
+        self.vector_normalizers.requires_grad_(False)
+        self.backbone.requires_grad_(True)
 
     def forward(self, obs: Mapping[str, torch.Tensor]) -> torch.Tensor:
         latents = {g: self.vector_encoders[g](self.vector_normalizers[g](obs[g])) for g in VECTOR_GROUPS}

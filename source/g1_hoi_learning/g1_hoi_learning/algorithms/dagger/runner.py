@@ -1,4 +1,4 @@
-"""Four-stage action DAgger with same-state labels and persistent CPU replay."""
+"""Synchronous student rollouts followed by current-window action distillation."""
 
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ from torch.utils.tensorboard import SummaryWriter
 from .algorithm import DaggerAlgorithm
 from .config import DaggerTrainConfig
 from .networks import StudentWeaveActor, TeacherWeaveActor, export_student
-from .storage import ReservoirBuffer, capture_samples, concatenate_samples
+from .storage import RolloutBuffer
 
-SCHEMA = "weave-depth-dagger-v1"
-STAGE_IDS = {"visual_warmup": 0, "joint_warmup": 1, "dagger_decay": 2, "student_only": 3}
+SCHEMA = "weave-depth-dagger-v2"
+STUDENT_SCHEMAS = {SCHEMA, "weave-depth-dagger-v1"}
 
 
 def file_sha256(path: str) -> str:
@@ -31,12 +31,6 @@ def file_sha256(path: str) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def choose_actions(teacher_actions, student_actions, beta: float):
-    """Select a whole action per env, never interpolate joint commands."""
-    selected = torch.rand(teacher_actions.shape[0], device=teacher_actions.device) < beta
-    return torch.where(selected[:, None], teacher_actions, student_actions), selected
 
 
 class DaggerRunner:
@@ -51,6 +45,8 @@ class DaggerRunner:
         environment_contract: dict,
         resolved_env: dict,
     ):
+        if env.num_envs != cfg.num_envs:
+            raise ValueError("Environment count differs from training config")
         self.env, self.teacher, self.student, self.cfg = env, teacher, student, cfg
         self.device = str(next(student.parameters()).device)
         self.run_dir = Path(run_dir)
@@ -59,70 +55,75 @@ class DaggerRunner:
         self.environment_contract = copy.deepcopy(environment_contract)
         self.resolved_env = copy.deepcopy(resolved_env)
         self.algorithm = DaggerAlgorithm(student, cfg)
-        self.buffer = ReservoirBuffer(cfg.buffer_capacity, cfg.seed)
-        self.iteration = 0  # NEXT iteration; snapshots are only taken at completed rollout/update boundaries.
+        self.rollout = RolloutBuffer(env.num_envs, cfg.rollout_steps)
+        self.iteration = 0  # NEXT iteration; save only at completed rollout/update boundaries.
         self.total_transitions = 0
+        self.total_optimizer_updates = 0
         self.episode_ids = torch.zeros(env.num_envs, dtype=torch.long, device=self.device)
         self.episode_steps = torch.zeros_like(self.episode_ids)
         self.writer = None
 
     def learn(self, initial_obs, is_running=lambda: True, max_iterations: int | None = None):
-        self.writer = SummaryWriter(str(self.run_dir / "tensorboard"), purge_step=self.iteration)
-        obs = initial_obs
-        end = self.cfg.total_iterations
+        if max_iterations is not None and max_iterations <= 0:
+            raise ValueError("max_iterations must be positive")
+        end = self.cfg.num_iterations
         if max_iterations is not None:
             end = min(end, self.iteration + max_iterations)
         if end <= self.iteration:
             raise ValueError("No iterations remaining")
+        self.writer = SummaryWriter(str(self.run_dir / "tensorboard"), purge_step=self.iteration)
+        obs = initial_obs
+        env_ids = torch.arange(self.env.num_envs, device=self.device)
         try:
             while self.iteration < end and is_running():
                 start = time.perf_counter()
                 if self.device.startswith("cuda"):
                     torch.cuda.reset_peak_memory_stats(self.device)
-                stage, beta = self.cfg.stage(self.iteration)
-                self.algorithm.set_stage(stage)
-                chunks = []
-                reward_sum, done_count, teacher_count, rollout_mse = 0.0, 0, 0, 0.0
+                self.student.eval()
+                self.rollout.clear()
+                reward_sum, done_count, rollout_mse = 0.0, 0, 0.0
                 for _ in range(self.cfg.rollout_steps):
                     if not is_running():
-                        return  # Do not save a partially collected/updated iteration.
+                        return  # Never save a partially collected/updated iteration.
                     with torch.no_grad():
                         a_teacher = self.teacher(obs)
                         a_student = self.student(obs)
-                        actions, selected = choose_actions(a_teacher, a_student, beta)
+                        if not torch.isfinite(a_student).all():
+                            raise FloatingPointError("Non-finite student rollout action")
                         command = self.env.unwrapped.command_manager.get_term("motion")
                         metadata = {
                             "clip_id": command.env_clip,
                             "ref_step": command.time_steps,
-                            "env_id": torch.arange(self.env.num_envs, device=self.device),
+                            "env_id": env_ids,
                             "episode_id": self.episode_ids,
                             "episode_step": self.episode_steps,
-                            "stage": torch.full_like(self.episode_ids, STAGE_IDS[stage]),
-                            "executed_teacher": selected,
                         }
-                        chunks.append(capture_samples(obs, a_teacher, metadata))
+                        self.rollout.add(obs, a_teacher, metadata)
                         rollout_mse += (a_student - a_teacher).square().mean().item()
-                        teacher_count += selected.sum().item()
-                        obs, rewards, dones, _ = self.env.step(actions)
+                        obs, rewards, dones, _ = self.env.step(a_student)
                         reward_sum += rewards.sum().item()
                         done_count += dones.sum().item()
                         self.episode_steps += 1
                         self.episode_ids += dones.long()
                         self.episode_steps[dones.bool()] = 0
-                current = concatenate_samples(chunks)
-                losses = self.algorithm.update(current, self.buffer, self.device)
-                self.buffer.add(current)
-                self.total_transitions += len(current["teacher_action"])
+                rollout_seconds = time.perf_counter() - start
+                if not is_running():
+                    return
+                training_start = time.perf_counter()
+                losses = self.algorithm.update(self.rollout, self.device)
+                training_seconds = time.perf_counter() - training_start
+                self.total_transitions += self.rollout.size
+                self.total_optimizer_updates += losses["optimizer_updates"]
                 metrics = {
                     **losses,
-                    "beta": beta,
-                    "stage_id": STAGE_IDS[stage],
-                    "teacher_fraction": teacher_count / len(current["teacher_action"]),
                     "rollout_action_mse": rollout_mse / self.cfg.rollout_steps,
-                    "reward_per_step": reward_sum / len(current["teacher_action"]),
+                    "reward_per_step": reward_sum / self.rollout.size,
                     "done_count": done_count,
-                    "buffer_size": self.buffer.size,
+                    "rollout_samples": self.rollout.size,
                     "transitions": self.total_transitions,
+                    "total_optimizer_updates": self.total_optimizer_updates,
+                    "rollout_seconds": rollout_seconds,
+                    "training_seconds": training_seconds,
                     "seconds": time.perf_counter() - start,
                     "process_ram_peak_gib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2),
                 }
@@ -132,20 +133,19 @@ class DaggerRunner:
                 for key, value in metrics.items():
                     self.writer.add_scalar(f"dagger/{key}", value, self.iteration)
                 with (self.run_dir / "metrics.jsonl").open("a") as stream:
-                    stream.write(json.dumps({"iteration": self.iteration, "stage": stage, **metrics}) + "\n")
+                    stream.write(json.dumps({"iteration": self.iteration, **metrics}) + "\n")
                 self.iteration += 1
-                if self.iteration == self.cfg.total_iterations or self.cfg.stage(self.iteration)[0] != stage:
-                    self.save_student(self.run_dir / f"student_{stage}.pt", completed_stage=stage)
                 if self.iteration % self.cfg.log_interval == 0 or self.iteration == 1:
                     print(
-                        f"[DAgger] {self.iteration}/{end} {stage} beta={beta:.3f} "
-                        f"mse={losses['action_mse']:.6f} replay={self.buffer.size} "
-                        f"seconds={metrics['seconds']:.2f}",
+                        f"[DAgger] {self.iteration}/{end} "
+                        f"mse={losses['train_action_mse']:.6f} samples={self.rollout.size} "
+                        f"updates={losses['optimizer_updates']} seconds={metrics['seconds']:.2f}",
                         flush=True,
                     )
                 if self.iteration % self.cfg.save_interval == 0:
                     self.save(self.run_dir / f"model_{self.iteration}.pt")
             self.save(self.run_dir / f"model_{self.iteration}.pt")
+            self.save_student(self.run_dir / "student_weights.pt")
             export_student(self.student, str(self.run_dir / "student_policy.pt"))
         finally:
             self.writer.close()
@@ -161,13 +161,22 @@ class DaggerRunner:
             "resolved_env": self.resolved_env,
         }
 
-    def save_student(self, path: Path, completed_stage: str):
-        """Evaluation-compatible weights without optimizer or replay; not a resume checkpoint."""
+    def save_student(self, path: Path):
+        """Evaluation/warm-start weights; not an optimizer resume checkpoint."""
         state = self._student_snapshot()
-        state.update(kind="student_weights", completed_stage=completed_stage)
+        state.update(kind="student_weights")
         temporary = path.with_suffix(".tmp")
         torch.save(state, temporary)
         temporary.replace(path)
+
+    def load_student(self, path: str):
+        """Warm start v1/v2 weights with a fresh optimizer and training counters."""
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        if state.get("schema") not in STUDENT_SCHEMAS or state.get("actor_spec") != self.student.spec:
+            raise ValueError("Incompatible student weights; use a DAgger checkpoint, not a TorchScript export")
+        if state["teacher_info"]["sha256"] != self.teacher_info["sha256"]:
+            raise ValueError("Student weights use a different teacher checkpoint")
+        self.student.load_state_dict(state["student_state_dict"], strict=True)
 
     def save(self, path: Path):
         state = self._student_snapshot()
@@ -175,12 +184,9 @@ class DaggerRunner:
             {
                 "kind": "training",
                 "optimizer_state_dict": self.algorithm.optimizer.state_dict(),
-                "joint_enabled": self.algorithm.joint_enabled,
                 "train_cfg": asdict(self.cfg),
-                "stage": self.cfg.stage(self.iteration)[0],
-                "beta": self.cfg.stage(self.iteration)[1],
                 "total_transitions": self.total_transitions,
-                "replay": self.buffer.state_dict(),
+                "total_optimizer_updates": self.total_optimizer_updates,
                 "episode_ids": self.episode_ids.cpu(),
                 "rng": {
                     "torch": torch.get_rng_state(),
@@ -193,7 +199,7 @@ class DaggerRunner:
         temporary = path.with_suffix(".tmp")
         torch.save(state, temporary)
         temporary.replace(path)
-        # Only prune this run's numbered full snapshots, after the new one is committed.
+        # Prune only this run's numbered snapshots, after committing the new one.
         if path.parent.resolve() == self.run_dir.resolve() and re.fullmatch(r"model_\d+\.pt", path.name):
             checkpoints = [
                 entry for entry in self.run_dir.glob("model_*.pt") if re.fullmatch(r"model_\d+\.pt", entry.name)
@@ -206,11 +212,15 @@ class DaggerRunner:
         state = torch.load(path, map_location="cpu", weights_only=False)
         if state.get("kind", "training") != "training":
             raise ValueError("Resume requires a full model_<iteration>.pt checkpoint, not student weights")
-        if state["schema"] != SCHEMA or state["actor_spec"] != self.student.spec:
-            raise ValueError("Incompatible DAgger checkpoint")
+        if state.get("schema") != SCHEMA:
+            raise ValueError(
+                "Legacy DAgger training cannot resume this schedule; use --student_checkpoint to warm start"
+            )
+        if state["actor_spec"] != self.student.spec:
+            raise ValueError("Incompatible DAgger actor")
         saved_cfg = asdict(DaggerTrainConfig(**state["train_cfg"]))
         current_cfg = asdict(self.cfg)
-        # Memory/save controls may change on resume; the effective batch and learning schedule may not.
+        # Memory/save controls may change; effective batches and the schedule may not.
         for key in ("micro_batch_size", "keep_last_checkpoints"):
             saved_cfg.pop(key)
             current_cfg.pop(key)
@@ -219,15 +229,13 @@ class DaggerRunner:
         if state["teacher_info"]["sha256"] != self.teacher_info["sha256"]:
             raise ValueError("Resume teacher checkpoint differs")
         self.student.load_state_dict(state["student_state_dict"], strict=True)
-        if state["joint_enabled"]:
-            self.algorithm.set_stage("joint_warmup")  # build identical parameter groups before loading AdamW
         self.algorithm.optimizer.load_state_dict(state["optimizer_state_dict"])
-        self.buffer.load_state_dict(state["replay"])
         self.iteration = state["next_iteration"]
         self.total_transitions = state["total_transitions"]
+        self.total_optimizer_updates = state["total_optimizer_updates"]
         self.episode_ids.copy_(state["episode_ids"].to(self.device) + 1)
-        self.episode_steps.zero_()  # Simulator physics is restarted, not serialized.
-        self.algorithm.set_stage(self.cfg.stage(self.iteration)[0])
+        self.episode_steps.zero_()  # Physics restarts on resume.
+        self.rollout.clear()
         torch.set_rng_state(state["rng"]["torch"])
         np.random.set_state(state["rng"]["numpy"])
         random.setstate(state["rng"]["python"])

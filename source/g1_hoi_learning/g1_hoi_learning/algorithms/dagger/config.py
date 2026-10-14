@@ -1,22 +1,18 @@
-"""Simulator-independent training defaults and validation."""
+"""Simulator-independent settings for current-rollout online action distillation."""
 
+import math
 from dataclasses import dataclass
 
 
 @dataclass
 class DaggerTrainConfig:
     seed: int = 42
-    num_envs: int = 32
-    rollout_steps: int = 32
-    batch_size: int = 256
-    micro_batch_size: int | None = None
-    updates_per_iteration: int = 20
-    buffer_capacity: int = 10_000
-    current_fraction: float = 0.5
-    visual_warmup_iterations: int = 500
-    joint_warmup_iterations: int = 500
-    decay_iterations: int = 5000
-    student_iterations: int = 5000
+    num_envs: int = 4096
+    rollout_steps: int = 16
+    num_learning_epochs: int = 2
+    num_mini_batches: int = 32
+    micro_batch_size: int | None = 128
+    num_iterations: int = 11000
     cnn_lr: float = 1e-4
     transferred_lr: float = 1e-5
     weight_decay: float = 1e-4
@@ -26,46 +22,30 @@ class DaggerTrainConfig:
     log_interval: int = 10
 
     def __post_init__(self):
-        positive = (
+        for name in (
             "num_envs",
             "rollout_steps",
-            "batch_size",
-            "updates_per_iteration",
-            "buffer_capacity",
+            "num_learning_epochs",
+            "num_mini_batches",
+            "num_iterations",
             "save_interval",
             "keep_last_checkpoints",
             "log_interval",
-            "cnn_lr",
-            "transferred_lr",
-            "max_grad_norm",
-        )
-        for name in positive:
-            if getattr(self, name) <= 0:
-                raise ValueError(f"{name} must be positive")
-        for name in ("visual_warmup_iterations", "joint_warmup_iterations", "decay_iterations", "student_iterations"):
-            if getattr(self, name) < 0:
-                raise ValueError(f"{name} must be nonnegative")
-        if self.total_iterations < 1 or not 0 < self.current_fraction <= 1 or self.weight_decay < 0:
-            raise ValueError("Invalid training duration, current_fraction, or weight_decay")
-        if self.micro_batch_size is not None and not 0 < self.micro_batch_size <= self.batch_size:
-            raise ValueError("micro_batch_size must be positive and no greater than batch_size")
-
-    @property
-    def total_iterations(self):
-        return (
-            self.visual_warmup_iterations
-            + self.joint_warmup_iterations
-            + self.decay_iterations
-            + self.student_iterations
-        )
-
-    def stage(self, iteration: int) -> tuple[str, float]:
-        if iteration < self.visual_warmup_iterations:
-            return "visual_warmup", 1.0
-        iteration -= self.visual_warmup_iterations
-        if iteration < self.joint_warmup_iterations:
-            return "joint_warmup", 1.0
-        iteration -= self.joint_warmup_iterations
-        if iteration < self.decay_iterations:
-            return "dagger_decay", 1.0 - iteration / self.decay_iterations
-        return "student_only", 0.0
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.num_mini_batches > self.num_envs * self.rollout_steps:
+            raise ValueError("num_mini_batches must not exceed the rollout sample count")
+        if self.micro_batch_size is not None and (
+            isinstance(self.micro_batch_size, bool)
+            or not isinstance(self.micro_batch_size, int)
+            or self.micro_batch_size <= 0
+        ):
+            raise ValueError("micro_batch_size must be a positive integer or null")
+        for name in ("cnn_lr", "transferred_lr", "max_grad_norm"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if not math.isfinite(self.weight_decay) or self.weight_decay < 0:
+            raise ValueError("weight_decay must be finite and nonnegative")

@@ -1,4 +1,4 @@
-"""Critical contracts: transfer, frozen-backbone gradients, state alignment, replay, and resume."""
+"""Online action distillation: parameter freezing, full epochs, accumulation, state alignment and resume."""
 
 import copy
 
@@ -16,8 +16,8 @@ from g1_hoi_learning.algorithms.dagger.networks import (
     TeacherWeaveActor,
     export_student,
 )
-from g1_hoi_learning.algorithms.dagger.runner import DaggerRunner, choose_actions
-from g1_hoi_learning.algorithms.dagger.storage import ReservoirBuffer, capture_samples
+from g1_hoi_learning.algorithms.dagger.runner import SCHEMA, DaggerRunner
+from g1_hoi_learning.algorithms.dagger.storage import RolloutBuffer
 from g1_hoi_learning.algorithms.ppo.networks import SimBaActorCritic
 from g1_hoi_learning.algorithms.vision import depth_from_mm, depth_to_mm, preprocess_depth
 from tensordict import TensorDict
@@ -143,71 +143,148 @@ def test_transfer_group_normalizers_and_student_has_no_object_leak(spec, teacher
         torch.testing.assert_close(value, teacher_before[key], rtol=0, atol=0)
 
 
-def test_cnn_only_then_joint_update_preserves_adam(spec, teacher, observations):
+def small_config(**overrides):
+    settings = dict(
+        num_envs=4,
+        rollout_steps=1,
+        num_learning_epochs=2,
+        num_mini_batches=2,
+        micro_batch_size=2,
+        num_iterations=4,
+    )
+    settings.update(overrides)
+    return DaggerTrainConfig(**settings)
+
+
+def make_rollout(observations, target, steps=1):
+    rollout = RolloutBuffer(len(target), steps)
+    for _ in range(steps):
+        rollout.add(observations, target, {"episode_step": torch.arange(len(target))})
+    return rollout
+
+
+def test_joint_cnn_simba_updates_leave_teacher_vector_branches_and_norms_fixed(spec, teacher, observations):
     student = StudentWeaveActor(spec)
     student.initialize_from_teacher(teacher)
-    cfg = DaggerTrainConfig(batch_size=4, updates_per_iteration=1, cnn_lr=1e-3)
-    algorithm = DaggerAlgorithm(student, cfg)
-    algorithm.set_stage("visual_warmup")
-    current = capture_samples(observations, torch.ones(4, 3), {})
-    buffer = ReservoirBuffer(10, 42)
-    cnn_before = next(student.depth_encoder.parameters()).detach().clone()
-    transferred_before = copy.deepcopy(student.backbone.state_dict())
-    algorithm.update(current, buffer, "cpu")
-    assert not torch.equal(cnn_before, next(student.depth_encoder.parameters()))
-    assert next(student.depth_encoder.parameters()).grad.abs().sum() > 0
-    for key, value in student.backbone.state_dict().items():
-        torch.testing.assert_close(value, transferred_before[key], rtol=0, atol=0)
-    cnn_param = next(student.depth_encoder.parameters())
-    step_before = algorithm.optimizer.state[cnn_param]["step"].clone()
-    algorithm.set_stage("joint_warmup")
-    torch.testing.assert_close(algorithm.optimizer.state[cnn_param]["step"], step_before)
-    algorithm.update(current, buffer, "cpu")
-    assert all(p.requires_grad for p in student.parameters())
-    assert next(student.backbone.parameters()).grad.abs().sum() > 0
+    teacher_before = copy.deepcopy(teacher.state_dict())
+    vector_before = copy.deepcopy(student.vector_encoders.state_dict())
+    norm_before = copy.deepcopy(student.vector_normalizers.state_dict())
+    cnn_before = copy.deepcopy(student.depth_encoder.state_dict())
+    simba_before = copy.deepcopy(student.backbone.state_dict())
+    algorithm = DaggerAlgorithm(student, small_config(cnn_lr=1e-3, transferred_lr=1e-3))
+    rollout = make_rollout(observations, torch.ones(4, spec["num_actions"]))
+    result = algorithm.update(rollout, "cpu")
+    assert result["optimizer_updates"] == 4
+    assert any(not torch.equal(value, student.depth_encoder.state_dict()[key]) for key, value in cnn_before.items())
+    assert any(not torch.equal(value, student.backbone.state_dict()[key]) for key, value in simba_before.items())
+    assert all(p.grad is not None for p in algorithm.trainable_parameters)
+    assert all(not p.requires_grad and p.grad is None for p in student.vector_encoders.parameters())
     assert all(not norm.training for norm in student.vector_normalizers.values())
+    assert not student.vector_encoders.training
+    for original, current in (
+        (teacher_before, teacher.state_dict()),
+        (vector_before, student.vector_encoders.state_dict()),
+        (norm_before, student.vector_normalizers.state_dict()),
+    ):
+        for key in original:
+            torch.testing.assert_close(original[key], current[key], rtol=0, atol=0)
 
 
-def test_capture_owns_pre_step_data_and_reservoir_resume(observations):
+def test_rollout_owns_pre_step_data_reuses_allocation_and_has_no_history(observations):
     target = torch.arange(12).float().reshape(4, 3)
     expected = target.clone()
-    samples = capture_samples(observations, target, {"episode_step": torch.arange(4)})
+    rollout = make_rollout(observations, target)
+    arrays = dict(rollout.arrays)
     target.zero_()
     observations["head_depth"].zero_()
-    np.testing.assert_array_equal(samples["teacher_action"], expected.numpy())
-    assert samples["head_depth"].min() == 2000
-    replay = ReservoirBuffer(3, 42)
-    replay.add(samples)
-    assert replay.seen == 4 and replay.size == 3
-    restored = ReservoirBuffer(3, 1)
-    restored.load_state_dict(replay.state_dict())
-    replay.add(samples)
-    restored.add(samples)
-    for key in samples:
-        np.testing.assert_array_equal(restored.arrays[key], replay.arrays[key])
-    obs, actions = replay.sample(samples, 10, "cpu")
-    assert obs["head_depth"].shape == (10, 1, 128, 128) and actions.shape == (10, 3)
-    assert obs["head_depth"].min().item() == pytest.approx(0.2)
+    np.testing.assert_array_equal(rollout.arrays["teacher_action"], expected.numpy())
+    assert rollout.arrays["head_depth"].dtype == np.uint16
+    assert rollout.arrays["head_depth"].min() == 2000
+    obs, actions = rollout.batch(np.arange(4), "cpu")
+    assert obs["head_depth"].shape == (4, 1, 128, 128)
+    torch.testing.assert_close(obs["head_depth"], torch.full_like(obs["head_depth"], 0.2))
+    np.testing.assert_array_equal(actions.numpy(), expected.numpy())
+    rollout.clear()
+    with pytest.raises(ValueError, match="incomplete"):
+        list(rollout.minibatches(2))
+    rollout.add(observations, target, {"episode_step": torch.arange(4)})
+    assert all(rollout.arrays[key] is value for key, value in arrays.items())
+    assert rollout.arrays["teacher_action"].max() == 0
+    assert rollout.arrays["head_depth"].max() == 0
+    with pytest.raises(ValueError, match="full"):
+        rollout.add(observations, target, {"episode_step": torch.arange(4)})
 
 
-def test_stage_boundaries_and_action_selection():
-    cfg = DaggerTrainConfig(
-        visual_warmup_iterations=2, joint_warmup_iterations=2, decay_iterations=2, student_iterations=1
+def test_rollout_rejects_nonfinite_data_before_it_can_be_trained(observations):
+    rollout = RolloutBuffer(4, 1)
+    observations["head_depth"][0, 0, 0, 0] = float("nan")
+    with pytest.raises(ValueError, match="Non-finite"):
+        rollout.add(observations, torch.zeros(4, 3), {})
+    assert rollout.size == 0
+
+
+def test_epoch_balanced_partition_covers_all_samples_and_reshuffles():
+    rollout = RolloutBuffer(7, 1)
+    rollout.size = 7  # Index-only contract; no depth allocation needed.
+    torch.manual_seed(42)
+    first = list(rollout.minibatches(3))
+    second = list(rollout.minibatches(3))
+    assert [len(batch) for batch in first] == [3, 2, 2]
+    np.testing.assert_array_equal(np.sort(np.concatenate(first)), np.arange(7))
+    np.testing.assert_array_equal(np.sort(np.concatenate(second)), np.arange(7))
+    assert not np.array_equal(np.concatenate(first), np.concatenate(second))
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"num_mini_batches": 65537},
+        {"num_learning_epochs": 0},
+        {"micro_batch_size": 0},
+        {"num_iterations": 0},
+        {"cnn_lr": float("nan")},
+        {"weight_decay": -1},
+    ],
+)
+def test_invalid_training_settings(settings):
+    with pytest.raises(ValueError):
+        DaggerTrainConfig(**settings)
+
+
+def test_approved_config_performs_64_updates_and_transfers_only_microbatches(spec, teacher, observations):
+    # Use a tiny encoder to exercise the full approved sample/step counts on CPU.
+    cfg = DaggerTrainConfig()
+    assert (cfg.num_envs, cfg.rollout_steps, cfg.num_learning_epochs, cfg.num_mini_batches, cfg.micro_batch_size) == (
+        4096,
+        16,
+        2,
+        32,
+        128,
     )
-    assert [cfg.stage(i) for i in range(7)] == [
-        ("visual_warmup", 1),
-        ("visual_warmup", 1),
-        ("joint_warmup", 1),
-        ("joint_warmup", 1),
-        ("dagger_decay", 1),
-        ("dagger_decay", 0.5),
-        ("student_only", 0),
-    ]
-    teacher, student = torch.ones(20, 3), torch.zeros(20, 3)
-    assert torch.equal(choose_actions(teacher, student, 1)[0], teacher)
-    assert torch.equal(choose_actions(teacher, student, 0)[0], student)
-    actions, mask = choose_actions(teacher, student, 0.5)
-    assert torch.equal(actions, mask[:, None].expand_as(actions).float())
+    student = StudentWeaveActor(spec)
+    student.initialize_from_teacher(teacher)
+    student.depth_encoder = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(1, spec["latent_dim"]))
+    large_obs = {key: value.repeat(1024, 1) for key, value in observations.items() if key != "head_depth"}
+    large_obs["head_depth"] = torch.full((4096, 1, 1, 1), 0.2)
+    rollout = make_rollout(large_obs, torch.zeros(4096, spec["num_actions"]), cfg.rollout_steps)
+    algorithm = DaggerAlgorithm(student, cfg)
+    batches = []
+    batch = rollout.batch
+
+    def tracked_batch(indices, device):
+        batches.append(indices.copy())
+        assert len(indices) <= 128
+        return batch(indices, device)
+
+    rollout.batch = tracked_batch
+    result = algorithm.update(rollout, "cpu")
+    assert result["optimizer_updates"] == 64
+    assert result["samples_trained"] == 131072
+    assert len(batches) == 1024  # 16 backwards per optimizer step.
+    for epoch in range(2):
+        used = np.concatenate(batches[epoch * 512 : (epoch + 1) * 512])
+        np.testing.assert_array_equal(np.sort(used), np.arange(65536))
+    assert all(algorithm.optimizer.state[p]["step"] == 64 for p in algorithm.trainable_parameters)
 
 
 def test_export_is_student_only_and_matches_online(spec, teacher, observations, tmp_path):
@@ -241,108 +318,116 @@ class FakeEnv:
         return self.obs, torch.ones(4), torch.zeros(4, dtype=torch.long), {}
 
 
-def test_runner_same_state_labels_and_full_checkpoint_resume(spec, teacher, observations, tmp_path):
+def test_runner_student_execution_same_state_labels_and_full_checkpoint_resume(spec, teacher, observations, tmp_path):
     student = StudentWeaveActor(spec)
     student.initialize_from_teacher(teacher)
     env = FakeEnv(observations)
-    cfg = DaggerTrainConfig(
-        num_envs=4,
-        rollout_steps=1,
-        batch_size=4,
-        updates_per_iteration=1,
-        buffer_capacity=10,
-        visual_warmup_iterations=1,
-        joint_warmup_iterations=1,
-        decay_iterations=1,
-        student_iterations=1,
-    )
+    cfg = small_config()
     info, contract = {"sha256": "fixture"}, {"test": True}
     expected_label = teacher(observations).detach().clone()
+    expected_action = student(observations).detach().clone()
     expected_obs = observations["robot_proprio"].clone()
     runner = DaggerRunner(env, teacher, student, cfg, str(tmp_path), info, contract, {})
     runner.learn(observations, max_iterations=1)
-    np.testing.assert_array_equal(runner.buffer.arrays["teacher_action"][:4], expected_label.numpy())
-    np.testing.assert_array_equal(runner.buffer.arrays["robot_proprio"][:4], expected_obs.numpy())
-    torch.testing.assert_close(env.actions[0], expected_label)
+    np.testing.assert_array_equal(runner.rollout.arrays["teacher_action"], expected_label.numpy())
+    np.testing.assert_array_equal(runner.rollout.arrays["robot_proprio"], expected_obs.numpy())
+    torch.testing.assert_close(env.actions[0], expected_action)
+    checkpoint = torch.load(tmp_path / "model_1.pt", weights_only=False)
+    assert checkpoint["schema"] == SCHEMA
+    assert not {"replay", "stage", "beta", "joint_enabled"} & checkpoint.keys()
+    assert checkpoint["total_optimizer_updates"] == 4
     replacement = DaggerRunner(env, teacher, StudentWeaveActor(spec), cfg, str(tmp_path), info, contract, {})
     replacement.load(str(tmp_path / "model_1.pt"))
-    assert replacement.iteration == 1 and replacement.buffer.size == 4
-    assert len(replacement.algorithm.optimizer.param_groups) == 2  # transition into joint warmup
+    assert replacement.iteration == 1 and replacement.rollout.size == 0
+    assert replacement.total_transitions == 4 and replacement.total_optimizer_updates == 4
+    assert len(replacement.algorithm.optimizer.param_groups) == 2
     assert replacement.algorithm.optimizer.state
+    expected_permutation = torch.randperm(8)
+    replacement.load(str(tmp_path / "model_1.pt"))
+    torch.testing.assert_close(torch.randperm(8), expected_permutation)
     replacement.learn(observations, max_iterations=1)
     third = DaggerRunner(env, teacher, StudentWeaveActor(spec), cfg, str(tmp_path), info, contract, {})
     third.load(str(tmp_path / "model_2.pt"))
-    assert third.algorithm.joint_enabled and third.buffer.seen == 8
+    assert third.total_transitions == 8 and third.total_optimizer_updates == 8
     for key, value in third.student.state_dict().items():
         torch.testing.assert_close(value, replacement.student.state_dict()[key], rtol=0, atol=0)
 
 
-def test_runner_all_stages_include_student_execution(spec, teacher, observations, tmp_path):
+def test_runner_continues_across_windows_updates_before_next_sampling_and_handles_episode_resets(
+    spec, teacher, observations, tmp_path
+):
     student = StudentWeaveActor(spec)
     student.initialize_from_teacher(teacher)
+    env = FakeEnv(observations)
+    cfg = small_config(rollout_steps=2, num_iterations=3, save_interval=1)
+    runner = DaggerRunner(env, teacher, student, cfg, str(tmp_path), {"sha256": "fixture"}, {}, {})
+    original_step = env.step
+    original_update = runner.algorithm.update
+    updates = []
+    step_ids = []
+    initial_weights = copy.deepcopy(student.state_dict())
     teacher_before = copy.deepcopy(teacher.state_dict())
-    cfg = DaggerTrainConfig(
-        num_envs=4,
-        rollout_steps=1,
-        batch_size=4,
-        updates_per_iteration=1,
-        buffer_capacity=24,
-        visual_warmup_iterations=1,
-        joint_warmup_iterations=1,
-        decay_iterations=2,
-        student_iterations=1,
-        save_interval=1,
-    )
-    runner = DaggerRunner(FakeEnv(observations), teacher, student, cfg, str(tmp_path), {}, {}, {})
+
+    def step(actions):
+        torch.testing.assert_close(actions, student(observations), rtol=0, atol=0)
+        assert not student.training
+        result = original_step(actions)
+        if len(env.actions) == 2:
+            result[2][0] = 1
+        return result
+
+    def update(rollout, device):
+        assert len(env.actions) == (len(updates) + 1) * 2
+        step_ids.append(rollout.arrays["episode_step"].copy())
+        updates.append(original_update(rollout, device))
+        assert any(not torch.equal(value, student.state_dict()[key]) for key, value in initial_weights.items())
+        return updates[-1]
+
+    env.step = step
+    runner.algorithm.update = update
     runner.learn(observations)
-    assert runner.iteration == 5 and runner.buffer.seen == 20
-    np.testing.assert_array_equal(runner.buffer.arrays["stage"][:20], np.repeat([0, 1, 2, 2, 3], 4))
-    assert runner.buffer.arrays["executed_teacher"][:12].all()
-    assert not runner.buffer.arrays["executed_teacher"][16:20].any()
+    assert runner.iteration == 3 and len(env.actions) == 6
+    assert runner.total_transitions == 24 and runner.rollout.size == 8
+    assert runner.total_optimizer_updates == 12
+    np.testing.assert_array_equal(step_ids[0], [0, 0, 0, 0, 1, 1, 1, 1])
+    np.testing.assert_array_equal(step_ids[1], [0, 2, 2, 2, 1, 3, 3, 3])
+    np.testing.assert_array_equal(runner.rollout.arrays["ref_step"], [4] * 4 + [5] * 4)
     for key, value in teacher.state_dict().items():
         torch.testing.assert_close(value, teacher_before[key], rtol=0, atol=0)
-    assert sorted(path.name for path in tmp_path.glob("model_*.pt")) == ["model_4.pt", "model_5.pt"]
-    for stage in ("visual_warmup", "joint_warmup", "dagger_decay", "student_only"):
-        weights = torch.load(tmp_path / f"student_{stage}.pt", weights_only=False)
-        assert weights["kind"] == "student_weights" and weights["completed_stage"] == stage
-        assert "replay" not in weights and "optimizer_state_dict" not in weights
-        assert {
-            "actor_spec",
-            "student_state_dict",
-            "resolved_env",
-            "environment_contract",
-            "teacher_info",
-        } <= weights.keys()
+    assert sorted(path.name for path in tmp_path.glob("model_*.pt")) == ["model_2.pt", "model_3.pt"]
+    weights = torch.load(tmp_path / "student_weights.pt", weights_only=False)
+    assert weights["kind"] == "student_weights"
+    assert "replay" not in weights and "optimizer_state_dict" not in weights
     with pytest.raises(ValueError, match="full model"):
-        runner.load(str(tmp_path / "student_visual_warmup.pt"))
+        runner.load(str(tmp_path / "student_weights.pt"))
 
 
-@pytest.mark.parametrize("stage", ["visual_warmup", "joint_warmup"])
-@pytest.mark.parametrize("micro_size", [2, 4])
-def test_microbatch_accumulation_matches_full_batch(spec, teacher, observations, stage, micro_size):
+@pytest.mark.parametrize("micro_size", [2, 4, 128])
+def test_microbatch_accumulation_matches_full_batch_including_uneven_batches(spec, teacher, observations, micro_size):
     student = StudentWeaveActor(spec)
     student.initialize_from_teacher(teacher)
     accumulated = copy.deepcopy(student)
-    settings = dict(batch_size=6, updates_per_iteration=2, cnn_lr=1e-3)
-    full = DaggerAlgorithm(student, DaggerTrainConfig(**settings))
-    micro = DaggerAlgorithm(accumulated, DaggerTrainConfig(**settings, micro_batch_size=micro_size))
-    full.set_stage(stage)
-    micro.set_stage(stage)
-    current = capture_samples(observations, torch.randn(4, spec["num_actions"]), {})
-    full_result = full.update(current, ReservoirBuffer(10, 42), "cpu")
-    micro_result = micro.update(current, ReservoirBuffer(10, 42), "cpu")
-    assert micro_result["action_mse"] == pytest.approx(full_result["action_mse"], rel=1e-5, abs=1e-7)
+    settings = dict(rollout_steps=3, num_mini_batches=5, cnn_lr=1e-3, transferred_lr=1e-3)
+    full = DaggerAlgorithm(student, small_config(**settings, micro_batch_size=None))
+    micro = DaggerAlgorithm(accumulated, small_config(**settings, micro_batch_size=micro_size))
+    rollout = make_rollout(observations, torch.randn(4, spec["num_actions"]), 3)
+    torch.manual_seed(42)
+    full_result = full.update(rollout, "cpu")
+    torch.manual_seed(42)
+    micro_result = micro.update(rollout, "cpu")
+    assert micro_result["train_action_mse"] == pytest.approx(full_result["train_action_mse"], rel=1e-5, abs=1e-7)
     for original, other in zip(student.parameters(), accumulated.parameters()):
         torch.testing.assert_close(original, other, rtol=1e-4, atol=2e-6)
         if original.requires_grad:
-            assert micro.optimizer.state[other]["step"] == full.optimizer.state[original]["step"] == 2
+            assert micro.optimizer.state[other]["step"] == full.optimizer.state[original]["step"] == 10
 
 
 def test_checkpoint_retention_preserves_old_snapshots_on_save_failure(
     spec, teacher, observations, tmp_path, monkeypatch
 ):
-    cfg = DaggerTrainConfig(num_envs=4)
-    runner = DaggerRunner(FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {}, {}, {})
+    runner = DaggerRunner(
+        FakeEnv(observations), teacher, StudentWeaveActor(spec), small_config(), str(tmp_path), {}, {}, {}
+    )
     runner.iteration = 9
     runner.save(tmp_path / "model_9.pt")
     runner.iteration = 10
@@ -368,13 +453,61 @@ def test_checkpoint_retention_preserves_old_snapshots_on_save_failure(
 
 
 def test_resume_allows_microbatch_change_but_preserves_training_contract(spec, teacher, observations, tmp_path):
-    cfg = DaggerTrainConfig(num_envs=4)
+    cfg = small_config()
     runner = DaggerRunner(
         FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {"sha256": "fixture"}, {}, {}
     )
     runner.save(tmp_path / "model_0.pt")
     cfg.micro_batch_size = 64
     runner.load(str(tmp_path / "model_0.pt"))
-    cfg.batch_size = 128
+    cfg.num_mini_batches = 1
     with pytest.raises(ValueError, match="original training"):
         runner.load(str(tmp_path / "model_0.pt"))
+
+
+@pytest.mark.parametrize("schema", ["weave-depth-dagger-v1", SCHEMA])
+def test_warm_start_accepts_v1_v2_weights_without_restoring_training_state(
+    spec, teacher, observations, tmp_path, schema
+):
+    runner = DaggerRunner(
+        FakeEnv(observations),
+        teacher,
+        StudentWeaveActor(spec),
+        small_config(),
+        str(tmp_path),
+        {"sha256": "fixture"},
+        {},
+        {},
+    )
+    runner.iteration = 3
+    state = copy.deepcopy(runner._student_snapshot())
+    state["schema"] = schema
+    state["kind"] = "training"
+    torch.save(state, tmp_path / "weights.pt")
+    if schema != SCHEMA:
+        with pytest.raises(ValueError, match="Legacy"):
+            runner.load(str(tmp_path / "weights.pt"))
+    runner.iteration = 0
+    with torch.no_grad():
+        next(runner.student.backbone.parameters()).add_(1)
+    runner.load_student(str(tmp_path / "weights.pt"))
+    assert runner.iteration == 0 and runner.total_optimizer_updates == 0
+    assert not runner.algorithm.optimizer.state
+    for key, value in runner.student.state_dict().items():
+        torch.testing.assert_close(value, state["student_state_dict"][key], rtol=0, atol=0)
+
+
+def test_partial_rollout_does_not_update_or_save(spec, teacher, observations, tmp_path):
+    runner = DaggerRunner(
+        FakeEnv(observations),
+        teacher,
+        StudentWeaveActor(spec),
+        small_config(rollout_steps=2),
+        str(tmp_path),
+        {},
+        {},
+        {},
+    )
+    runner.learn(observations, is_running=lambda: len(runner.env.actions) < 1)
+    assert runner.iteration == 0 and runner.total_optimizer_updates == 0
+    assert not list(tmp_path.glob("*.pt"))

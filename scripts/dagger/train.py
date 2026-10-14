@@ -1,4 +1,4 @@
-"""Train depth Student-Weave: visual BC, joint BC, mixed DAgger, pure-student DAgger."""
+"""Train depth Student-Weave online: student rollouts, current-window CNN/SimBa updates."""
 
 from __future__ import annotations
 
@@ -16,10 +16,12 @@ parser.add_argument("--config", default="configs/dagger/train.yaml")
 parser.add_argument("--teacher_checkpoint")
 parser.add_argument("--teacher_agent_config")
 parser.add_argument("--teacher_env_config")
-parser.add_argument("--resume", help="DAgger model checkpoint; resumes optimizer, stages and replay")
+initialization = parser.add_mutually_exclusive_group()
+initialization.add_argument("--resume", help="v2 model checkpoint; resume optimizer, counters and RNG")
+initialization.add_argument("--student_checkpoint", help="v1/v2 student weights; start a fresh training run")
 parser.add_argument("--output_dir")
-parser.add_argument("--num_envs", type=int)
-parser.add_argument("--micro_batch_size", type=int, help="Accumulate smaller backwards; batch_size stays unchanged")
+parser.add_argument("--num_envs", "--num-envs", type=int)
+parser.add_argument("--micro_batch_size", type=int, help="Accumulation size; effective minibatch stays unchanged")
 parser.add_argument("--seed", type=int)
 parser.add_argument("--motion_files", nargs="+")
 parser.add_argument(
@@ -44,7 +46,7 @@ from g1_hoi_learning.algorithms.dagger.networks import (
     TeacherWeaveActor,
     actor_spec,
 )
-from g1_hoi_learning.algorithms.dagger.runner import DaggerRunner, file_sha256
+from g1_hoi_learning.algorithms.dagger.runner import SCHEMA, DaggerRunner, file_sha256
 
 from isaaclab.utils.io import dump_yaml
 
@@ -57,7 +59,9 @@ def main():
     if resume_state:
         if resume_state.get("kind", "training") != "training":
             raise ValueError("--resume requires a full model_<iteration>.pt checkpoint, not student weights")
-        # The runner loads replay/weights once later; don't keep a second multi-GiB replay copy alive.
+        if resume_state.get("schema") != SCHEMA:
+            raise ValueError("Legacy training cannot resume this schedule; use --student_checkpoint to warm start")
+        # The runner loads weights/optimizer later; retain only initialization metadata here.
         resume_state = {key: resume_state[key] for key in ("train_cfg", "teacher_info", "resolved_env")}
     # Resuming uses the saved schedule and teacher configs, not today's YAML defaults.
     settings = resume_state["train_cfg"] if resume_state else config.get("training", {})
@@ -132,6 +136,8 @@ def main():
         if args.resume:
             runner.load(args.resume)
         else:
+            if args.student_checkpoint:
+                runner.load_student(args.student_checkpoint)
             dump_yaml(str(run_dir / "params" / "env.yaml"), env_cfg)
             dump_yaml(
                 str(run_dir / "params" / "dagger.yaml"),
@@ -141,9 +147,17 @@ def main():
                     "student": spec,
                 },
             )
-        # Release duplicate checkpoint/replay arrays before allocating the live replay buffer.
+        # Release checkpoint arrays before allocating the current rollout.
         del teacher_state, resume_state
         print(f"[DAgger] Teacher: {checkpoint}\n[DAgger] Output: {run_dir}", flush=True)
+        samples = cfg.num_envs * cfg.rollout_steps
+        print(
+            f"[DAgger] Student execution; {samples} samples/rollout, "
+            f"{cfg.num_learning_epochs} epochs x {cfg.num_mini_batches} minibatches = "
+            f"{cfg.num_learning_epochs * cfg.num_mini_batches} optimizer updates/iteration, "
+            f"microbatch={cfg.micro_batch_size}",
+            flush=True,
+        )
         runner.learn(obs, simulation_app.is_running, args.max_iterations)
     finally:
         env.close()

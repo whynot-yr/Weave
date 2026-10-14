@@ -7,17 +7,12 @@ teacher:
 
 training:
   seed: 42
-  num_envs: 32
-  rollout_steps: 32
-  batch_size: 256
-  micro_batch_size: null  # Set to 64 to accumulate four backwards per optimizer step.
-  updates_per_iteration: 20
-  buffer_capacity: 10000
-  current_fraction: 0.5
-  visual_warmup_iterations: 500
-  joint_warmup_iterations: 500
-  decay_iterations: 5000
-  student_iterations: 5000
+  num_envs: 4096
+  rollout_steps: 16
+  num_learning_epochs: 2
+  num_mini_batches: 32  # 2048 samples/minibatch; 64 optimizer updates per rollout.
+  micro_batch_size: 128  # Accumulate 16 backwards before each optimizer update.
+  num_iterations: 11000
   cnn_lr: 0.0001
   transferred_lr: 0.00001
   weight_decay: 0.0001

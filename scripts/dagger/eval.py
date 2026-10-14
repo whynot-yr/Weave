@@ -13,7 +13,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--config", default="configs/dagger/eval.yaml")
-parser.add_argument("--checkpoint", required=True, help="Full DAgger checkpoint or lightweight stage weights")
+parser.add_argument("--checkpoint", required=True, help="v1/v2 full DAgger checkpoint or lightweight student weights")
 parser.add_argument("--policy", choices=("student", "teacher"), default="student")
 parser.add_argument("--teacher_checkpoint", help="Relocated teacher baseline checkpoint")
 parser.add_argument("--motion_files", nargs="+", help="Held-out clips for one object")
@@ -35,7 +35,7 @@ import torch
 from common import make_env_cfg, read_yaml
 from g1_hoi_learning.algorithms.dagger.evaluation import ClipEvaluator, assign_eval_clips, summarize
 from g1_hoi_learning.algorithms.dagger.networks import TEACHER_GROUPS, StudentWeaveActor, TeacherWeaveActor
-from g1_hoi_learning.algorithms.dagger.runner import SCHEMA, file_sha256
+from g1_hoi_learning.algorithms.dagger.runner import STUDENT_SCHEMAS, file_sha256
 from g1_hoi_learning.algorithms.dagger.video import ClipVideoRecorder, VideoConfig
 from g1_hoi_learning.tasks.hoi.mdp.commands import MotionLoader
 
@@ -46,7 +46,7 @@ def main():
     config = read_yaml(args.config)
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     state.pop("replay", None)
-    if state["schema"] != SCHEMA:
+    if state.get("schema") not in STUDENT_SCHEMAS:
         raise ValueError("Expected a depth DAgger checkpoint")
     batch_size = args.num_envs if args.num_envs is not None else config.get("num_envs", 32)
     if batch_size < 1:
