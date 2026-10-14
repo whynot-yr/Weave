@@ -90,6 +90,11 @@ def main(context):
     # Resuming uses the saved schedule and teacher configs, not today's YAML defaults.
     settings = resume_state["train_cfg"] if resume_state else config.get("training", {})
     settings = dict(settings)
+    if resume_state:
+        # Save controls come from today's YAML; learning configuration stays checkpoint-owned.
+        for key in ("save_interval", "keep_last_checkpoints"):
+            if key in config.get("training", {}):
+                settings[key] = config["training"][key]
     for key in ("num_envs", "seed", "micro_batch_size"):
         if getattr(args, key) is not None:
             settings[key] = getattr(args, key)
@@ -214,7 +219,8 @@ def main(context):
                 f"{samples} samples/rank/rollout, global_samples={samples * context.world_size}; "
                 f"{cfg.num_learning_epochs} epochs x {cfg.num_mini_batches} minibatches = "
                 f"{cfg.num_learning_epochs * cfg.num_mini_batches} synchronized updates/iteration; "
-                f"microbatch_per_rank={cfg.micro_batch_size}",
+                f"microbatch_per_rank={cfg.micro_batch_size}; checkpoints every {cfg.save_interval} iterations, "
+                f"retention={cfg.keep_last_checkpoints if cfg.keep_last_checkpoints is not None else 'all'}",
                 flush=True,
             )
         runner.learn(obs, simulation_app.is_running, args.max_iterations)

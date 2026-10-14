@@ -244,6 +244,10 @@ def test_epoch_balanced_partition_covers_all_samples_and_reshuffles():
         {"num_iterations": 0},
         {"cnn_lr": float("nan")},
         {"weight_decay": -1},
+        {"keep_last_checkpoints": 0},
+        {"keep_last_checkpoints": -1},
+        {"keep_last_checkpoints": True},
+        {"keep_last_checkpoints": 1.5},
     ],
 )
 def test_invalid_training_settings(settings):
@@ -359,7 +363,7 @@ def test_runner_continues_across_windows_updates_before_next_sampling_and_handle
     student = StudentWeaveActor(spec)
     student.initialize_from_teacher(teacher)
     env = FakeEnv(observations)
-    cfg = small_config(rollout_steps=2, num_iterations=3, save_interval=1)
+    cfg = small_config(rollout_steps=2, num_iterations=3, save_interval=1, keep_last_checkpoints=2)
     runner = DaggerRunner(env, teacher, student, cfg, str(tmp_path), {"sha256": "fixture"}, {}, {})
     original_step = env.step
     original_update = runner.algorithm.update
@@ -426,7 +430,14 @@ def test_checkpoint_retention_preserves_old_snapshots_on_save_failure(
     spec, teacher, observations, tmp_path, monkeypatch
 ):
     runner = DaggerRunner(
-        FakeEnv(observations), teacher, StudentWeaveActor(spec), small_config(), str(tmp_path), {}, {}, {}
+        FakeEnv(observations),
+        teacher,
+        StudentWeaveActor(spec),
+        small_config(keep_last_checkpoints=2),
+        str(tmp_path),
+        {},
+        {},
+        {},
     )
     runner.iteration = 9
     runner.save(tmp_path / "model_9.pt")
@@ -453,16 +464,41 @@ def test_checkpoint_retention_preserves_old_snapshots_on_save_failure(
 
 
 def test_resume_allows_microbatch_change_but_preserves_training_contract(spec, teacher, observations, tmp_path):
-    cfg = small_config()
+    cfg = small_config(save_interval=100, keep_last_checkpoints=2)
     runner = DaggerRunner(
         FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {"sha256": "fixture"}, {}, {}
     )
     runner.save(tmp_path / "model_0.pt")
     cfg.micro_batch_size = 64
+    cfg.save_interval = 1000
+    cfg.keep_last_checkpoints = None
     runner.load(str(tmp_path / "model_0.pt"))
     cfg.num_mini_batches = 1
     with pytest.raises(ValueError, match="original training"):
         runner.load(str(tmp_path / "model_0.pt"))
+
+
+def test_keep_all_preserves_every_thousand_iteration_checkpoint(spec, teacher, observations, tmp_path):
+    cfg = small_config()
+    assert cfg.save_interval == 1000 and cfg.keep_last_checkpoints is None
+    runner = DaggerRunner(FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {}, {}, {})
+    for iteration in range(1000, 11001, 1000):
+        runner.iteration = iteration
+        runner.save(tmp_path / f"model_{iteration}.pt")
+    assert {path.name for path in tmp_path.glob("model_*.pt")} == {
+        f"model_{iteration}.pt" for iteration in range(1000, 11001, 1000)
+    }
+
+
+def test_runner_saves_at_thousand_boundary_and_nonmilestone_end(spec, teacher, observations, tmp_path):
+    cfg = small_config(num_iterations=11000)
+    runner = DaggerRunner(
+        FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {"sha256": "fixture"}, {}, {}
+    )
+    runner.iteration = 999
+    runner.learn(observations, max_iterations=2)
+    assert runner.iteration == 1001
+    assert {path.name for path in tmp_path.glob("model_*.pt")} == {"model_1000.pt", "model_1001.pt"}
 
 
 @pytest.mark.parametrize("schema", ["weave-depth-dagger-v1", SCHEMA])

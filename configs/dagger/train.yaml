@@ -17,8 +17,8 @@ training:
   transferred_lr: 0.00001
   weight_decay: 0.0001
   max_grad_norm: 1.0
-  save_interval: 100
-  keep_last_checkpoints: 2
+  save_interval: 1000
+  keep_last_checkpoints: null  # Keep all checkpoints; never prune older numbered models.
   log_interval: 10
 
 # Inherit teacher scene, actions, observations, references, rewards, and randomizations.

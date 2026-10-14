@@ -97,7 +97,7 @@ checkpoint 包含 `world_size` 和各 rank 的 RNG、episode 计数；模型使�
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 bash scripts/dagger/train_ddp.sh \
-  --resume logs/dagger/<run>/model_100.pt
+  --resume logs/dagger/<run>/model_1000.pt
 ```
 
 从现有单卡权重开始双卡训练，使用 `--student_checkpoint` 创建新训练，
@@ -200,12 +200,15 @@ Runs default to `logs/dagger/<timestamp>/` and contain:
 - `student_weights.pt`: lightweight evaluation/warm-start weights at invocation end.
 - `student_policy.pt`: student-only TorchScript export at invocation end.
 
-Full checkpoints are saved every 100 iterations and at invocation end. Only the
-newest `keep_last_checkpoints: 2` numbered full checkpoints in that run are
-retained, pruned only after successfully committing the new checkpoint.
+Full checkpoints are saved every 1000 iterations and at invocation end.
+The default `keep_last_checkpoints: null` keeps **all** numbered checkpoints:
+`model_1000.pt`, `model_2000.pt`, ..., `model_11000.pt`. An invocation ending
+between milestones also saves its final completed iteration. A positive integer
+can optionally retain only the newest N numbered checkpoints, pruning only after
+successfully committing a new checkpoint.
 
 ```bash
-python scripts/dagger/train.py --resume logs/dagger/<run>/model_100.pt
+python scripts/dagger/train.py --resume logs/dagger/<run>/model_1000.pt
 tensorboard --logdir logs/dagger
 ```
 
@@ -216,6 +219,9 @@ rollout/update boundaries. Restart interrupted partial iterations from the last
 complete snapshot. `--micro_batch_size` may change on resume without changing
 effective minibatches or update counts. Old v1 staged/replay checkpoints cannot
 resume this schedule; use `--student_checkpoint` for a fresh run instead.
+On resume, `save_interval` and `keep_last_checkpoints` use the current YAML,
+so older runs also adopt the 1000-iteration/keep-all policy without altering
+the saved learning schedule or optimizer.
 
 Peak RAM and PyTorch allocated/reserved CUDA memory are logged. Renderer
 allocations are outside PyTorch counters, so inspect `nvidia-smi` as well.

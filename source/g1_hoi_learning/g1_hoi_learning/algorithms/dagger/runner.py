@@ -262,7 +262,11 @@ class DaggerRunner:
         torch.save(state, temporary)
         temporary.replace(path)
         # Prune only this run's numbered snapshots, after committing the new one.
-        if path.parent.resolve() == self.run_dir.resolve() and re.fullmatch(r"model_\d+\.pt", path.name):
+        if (
+            self.cfg.keep_last_checkpoints is not None
+            and path.parent.resolve() == self.run_dir.resolve()
+            and re.fullmatch(r"model_\d+\.pt", path.name)
+        ):
             checkpoints = [
                 entry for entry in self.run_dir.glob("model_*.pt") if re.fullmatch(r"model_\d+\.pt", entry.name)
             ]
@@ -288,7 +292,7 @@ class DaggerRunner:
         saved_cfg = asdict(DaggerTrainConfig(**state["train_cfg"]))
         current_cfg = asdict(self.cfg)
         # Memory/save controls may change; effective batches and the schedule may not.
-        for key in ("micro_batch_size", "keep_last_checkpoints"):
+        for key in ("micro_batch_size", "save_interval", "keep_last_checkpoints"):
             saved_cfg.pop(key)
             current_cfg.pop(key)
         if saved_cfg != current_cfg or state["environment_contract"] != self.environment_contract:

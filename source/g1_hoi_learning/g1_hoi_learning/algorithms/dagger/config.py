@@ -17,8 +17,8 @@ class DaggerTrainConfig:
     transferred_lr: float = 1e-5
     weight_decay: float = 1e-4
     max_grad_norm: float = 1.0
-    save_interval: int = 100
-    keep_last_checkpoints: int = 2
+    save_interval: int = 1000
+    keep_last_checkpoints: int | None = None  # null keeps every completed checkpoint.
     log_interval: int = 10
 
     def __post_init__(self):
@@ -29,7 +29,6 @@ class DaggerTrainConfig:
             "num_mini_batches",
             "num_iterations",
             "save_interval",
-            "keep_last_checkpoints",
             "log_interval",
         ):
             value = getattr(self, name)
@@ -37,6 +36,12 @@ class DaggerTrainConfig:
                 raise ValueError(f"{name} must be a positive integer")
         if self.num_mini_batches > self.num_envs * self.rollout_steps:
             raise ValueError("num_mini_batches must not exceed the rollout sample count")
+        if self.keep_last_checkpoints is not None and (
+            isinstance(self.keep_last_checkpoints, bool)
+            or not isinstance(self.keep_last_checkpoints, int)
+            or self.keep_last_checkpoints <= 0
+        ):
+            raise ValueError("keep_last_checkpoints must be a positive integer or null")
         if self.micro_batch_size is not None and (
             isinstance(self.micro_batch_size, bool)
             or not isinstance(self.micro_batch_size, int)
