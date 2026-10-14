@@ -132,10 +132,17 @@ use `nvidia-smi` as well because renderer allocations are outside PyTorch's coun
 ## Evaluate
 
 Use held-out clips for **one object per invocation**, following Weave's current
-`eval_mode` limitation. Evaluation batches camera environments (default 32),
-so every clip can be evaluated without rendering all clips simultaneously.
-The scene is created once and reset onto successive clip batches; the last
-batch's unused slots repeat a valid clip and are excluded from the report.
+`eval_mode` limitation. Evaluation automatically records an MP4 for every clip
+by default, using a single environment and the same rollout as the reported
+metrics. The scene is created once and reused across clips. Student depth inputs
+remain 128x128; the video uses an external RGB camera framing the robot and
+object together, increasing viewing distance when the object is farther away.
+Video mode uses one environment even if `--num_envs 32` is passed, and prints
+the actual configuration at startup.
+
+Set `video.enabled: false` in [eval.yaml](../../configs/dagger/eval.yaml), or pass
+`--no_video`, for the original parallel evaluation (default batch limit 32).
+The final batch's unused slots repeat a valid clip and are excluded from the report.
 
 ```bash
 python scripts/dagger/eval.py \
@@ -146,6 +153,12 @@ python scripts/dagger/eval.py \
   --checkpoint logs/dagger/<run>/model_11000.pt \
   --motion_files /path/to/held_out_floorlamp.npz \
   --policy teacher
+
+# Faster parallel metrics without recording:
+python scripts/dagger/eval.py \
+  --checkpoint logs/dagger/<run>/student_student_only.pt \
+  --motion_files /path/to/held_out_floorlamp.npz \
+  --no_video --num_envs 32
 ```
 
 Both use deterministic evaluation, no domain randomization, no proprio noise,
@@ -158,6 +171,28 @@ Reports go to `eval_student/metrics.json` and `eval_teacher/metrics.json`, or
 success/progress/failure reasons, missed reference contact bodies per step,
 action-change MSE, and synchronized batch inference latency. Camera rendering
 and environment stepping are outside the reported policy inference latency.
+
+Videos are saved as `eval_<policy>/videos/clip_<id>_<motion_name>.mp4`, with
+sanitized names and clip ids to distinguish duplicate motion names. The default
+is H.264 RGB video at 1280x720, sampled every two control steps: 25 FPS at the
+current 50 Hz control rate. `video.width`, `video.height`, and `video.frame_stride`
+are configurable; dimensions must be positive and even. Frames are streamed
+through ImageIO/FFmpeg rather than buffered for the whole episode. The runtime
+needs `imageio` and `imageio-ffmpeg` (both are present in the current simulator environment).
+
+Each clip records its initial frame and terminal frame; the latter is captured
+by an Isaac Lab post-step recorder callback **before automatic environment reset**.
+Successful and failed episodes both produce videos. The recorder never appends
+the subsequent reset state. Each clip row includes `video_path` (relative to the
+report directory), `video_frames`, `video_fps`, `video_complete`,
+`video_frame_steps`, and `video_simulation_seconds`. An interrupted rollout is
+marked incomplete, and a playable partial recording is finalized when possible.
+The extra initial/terminal frames may extend playback by up to two video frames.
+
+`metrics.json` is atomically updated after every clip/batch. MP4s are written as
+`.partial.mp4` until the encoder closes successfully, then renamed to their final
+names. Re-running evaluation into the same output directory replaces matching
+clip videos and the report; use `--output_dir` to retain separate evaluations.
 
 ## Export interface and checks
 
