@@ -6,6 +6,8 @@ import copy
 import hashlib
 import json
 import random
+import re
+import resource
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -75,6 +77,8 @@ class DaggerRunner:
         try:
             while self.iteration < end and is_running():
                 start = time.perf_counter()
+                if self.device.startswith("cuda"):
+                    torch.cuda.reset_peak_memory_stats(self.device)
                 stage, beta = self.cfg.stage(self.iteration)
                 self.algorithm.set_stage(stage)
                 chunks = []
@@ -120,12 +124,18 @@ class DaggerRunner:
                     "buffer_size": self.buffer.size,
                     "transitions": self.total_transitions,
                     "seconds": time.perf_counter() - start,
+                    "process_ram_peak_gib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2),
                 }
+                if self.device.startswith("cuda"):
+                    metrics["torch_cuda_peak_allocated_gib"] = torch.cuda.max_memory_allocated(self.device) / (1024**3)
+                    metrics["torch_cuda_peak_reserved_gib"] = torch.cuda.max_memory_reserved(self.device) / (1024**3)
                 for key, value in metrics.items():
                     self.writer.add_scalar(f"dagger/{key}", value, self.iteration)
                 with (self.run_dir / "metrics.jsonl").open("a") as stream:
                     stream.write(json.dumps({"iteration": self.iteration, "stage": stage, **metrics}) + "\n")
                 self.iteration += 1
+                if self.iteration == self.cfg.total_iterations or self.cfg.stage(self.iteration)[0] != stage:
+                    self.save_student(self.run_dir / f"student_{stage}.pt", completed_stage=stage)
                 if self.iteration % self.cfg.log_interval == 0 or self.iteration == 1:
                     print(
                         f"[DAgger] {self.iteration}/{end} {stage} beta={beta:.3f} "
@@ -140,39 +150,71 @@ class DaggerRunner:
         finally:
             self.writer.close()
 
-    def save(self, path: Path):
-        state = {
+    def _student_snapshot(self) -> dict:
+        return {
             "schema": SCHEMA,
             "actor_spec": self.student.spec,
             "student_state_dict": self.student.state_dict(),
-            "optimizer_state_dict": self.algorithm.optimizer.state_dict(),
-            "joint_enabled": self.algorithm.joint_enabled,
-            "train_cfg": asdict(self.cfg),
             "next_iteration": self.iteration,
-            "stage": self.cfg.stage(self.iteration)[0],
-            "beta": self.cfg.stage(self.iteration)[1],
-            "total_transitions": self.total_transitions,
             "teacher_info": self.teacher_info,
             "environment_contract": self.environment_contract,
             "resolved_env": self.resolved_env,
-            "replay": self.buffer.state_dict(),
-            "episode_ids": self.episode_ids.cpu(),
-            "rng": {
-                "torch": torch.get_rng_state(),
-                "numpy": np.random.get_state(),
-                "python": random.getstate(),
-                "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
-            },
         }
+
+    def save_student(self, path: Path, completed_stage: str):
+        """Evaluation-compatible weights without optimizer or replay; not a resume checkpoint."""
+        state = self._student_snapshot()
+        state.update(kind="student_weights", completed_stage=completed_stage)
         temporary = path.with_suffix(".tmp")
         torch.save(state, temporary)
         temporary.replace(path)
 
+    def save(self, path: Path):
+        state = self._student_snapshot()
+        state.update(
+            {
+                "kind": "training",
+                "optimizer_state_dict": self.algorithm.optimizer.state_dict(),
+                "joint_enabled": self.algorithm.joint_enabled,
+                "train_cfg": asdict(self.cfg),
+                "stage": self.cfg.stage(self.iteration)[0],
+                "beta": self.cfg.stage(self.iteration)[1],
+                "total_transitions": self.total_transitions,
+                "replay": self.buffer.state_dict(),
+                "episode_ids": self.episode_ids.cpu(),
+                "rng": {
+                    "torch": torch.get_rng_state(),
+                    "numpy": np.random.get_state(),
+                    "python": random.getstate(),
+                    "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+                },
+            }
+        )
+        temporary = path.with_suffix(".tmp")
+        torch.save(state, temporary)
+        temporary.replace(path)
+        # Only prune this run's numbered full snapshots, after the new one is committed.
+        if path.parent.resolve() == self.run_dir.resolve() and re.fullmatch(r"model_\d+\.pt", path.name):
+            checkpoints = [
+                entry for entry in self.run_dir.glob("model_*.pt") if re.fullmatch(r"model_\d+\.pt", entry.name)
+            ]
+            checkpoints.sort(key=lambda entry: int(entry.stem.removeprefix("model_")), reverse=True)
+            for old in checkpoints[self.cfg.keep_last_checkpoints :]:
+                old.unlink()
+
     def load(self, path: str):
         state = torch.load(path, map_location="cpu", weights_only=False)
+        if state.get("kind", "training") != "training":
+            raise ValueError("Resume requires a full model_<iteration>.pt checkpoint, not student weights")
         if state["schema"] != SCHEMA or state["actor_spec"] != self.student.spec:
             raise ValueError("Incompatible DAgger checkpoint")
-        if state["train_cfg"] != asdict(self.cfg) or state["environment_contract"] != self.environment_contract:
+        saved_cfg = asdict(DaggerTrainConfig(**state["train_cfg"]))
+        current_cfg = asdict(self.cfg)
+        # Memory/save controls may change on resume; the effective batch and learning schedule may not.
+        for key in ("micro_batch_size", "keep_last_checkpoints"):
+            saved_cfg.pop(key)
+            current_cfg.pop(key)
+        if saved_cfg != current_cfg or state["environment_contract"] != self.environment_contract:
             raise ValueError("Resume requires the original training and environment contracts")
         if state["teacher_info"]["sha256"] != self.teacher_info["sha256"]:
             raise ValueError("Resume teacher checkpoint differs")

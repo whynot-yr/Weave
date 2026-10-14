@@ -38,14 +38,21 @@ class DaggerAlgorithm:
         losses, grad_norms = [], []
         for _ in range(self.cfg.updates_per_iteration):
             obs, target = buffer.sample(current, self.cfg.batch_size, device, self.cfg.current_fraction)
-            prediction = self.student(obs)
-            loss = nn.functional.mse_loss(prediction, target)
-            if not torch.isfinite(loss):
-                raise FloatingPointError("Non-finite action MSE")
             self.optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            micro_size = self.cfg.micro_batch_size or self.cfg.batch_size
+            total_loss = 0.0
+            for start in range(0, self.cfg.batch_size, micro_size):
+                stop = min(start + micro_size, self.cfg.batch_size)
+                prediction = self.student({key: value[start:stop] for key, value in obs.items()})
+                loss = nn.functional.mse_loss(prediction, target[start:stop])
+                if not torch.isfinite(loss):
+                    raise FloatingPointError("Non-finite action MSE")
+                # Weight a shorter final microbatch by its sample count as well.
+                weighted_loss = loss * ((stop - start) / self.cfg.batch_size)
+                weighted_loss.backward()
+                total_loss += weighted_loss.detach().item()
             grad = nn.utils.clip_grad_norm_(self.student.parameters(), self.cfg.max_grad_norm, error_if_nonfinite=True)
             self.optimizer.step()
-            losses.append(loss.detach().item())
+            losses.append(total_loss)
             grad_norms.append(grad.item())
         return {"action_mse": sum(losses) / len(losses), "grad_norm": sum(grad_norms) / len(grad_norms)}

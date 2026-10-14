@@ -9,8 +9,9 @@ class DaggerTrainConfig:
     num_envs: int = 32
     rollout_steps: int = 32
     batch_size: int = 256
+    micro_batch_size: int | None = None
     updates_per_iteration: int = 20
-    buffer_capacity: int = 50_000
+    buffer_capacity: int = 10_000
     current_fraction: float = 0.5
     visual_warmup_iterations: int = 500
     joint_warmup_iterations: int = 500
@@ -21,6 +22,7 @@ class DaggerTrainConfig:
     weight_decay: float = 1e-4
     max_grad_norm: float = 1.0
     save_interval: int = 100
+    keep_last_checkpoints: int = 2
     log_interval: int = 10
 
     def __post_init__(self):
@@ -31,6 +33,7 @@ class DaggerTrainConfig:
             "updates_per_iteration",
             "buffer_capacity",
             "save_interval",
+            "keep_last_checkpoints",
             "log_interval",
             "cnn_lr",
             "transferred_lr",
@@ -44,6 +47,8 @@ class DaggerTrainConfig:
                 raise ValueError(f"{name} must be nonnegative")
         if self.total_iterations < 1 or not 0 < self.current_fraction <= 1 or self.weight_decay < 0:
             raise ValueError("Invalid training duration, current_fraction, or weight_decay")
+        if self.micro_batch_size is not None and not 0 < self.micro_batch_size <= self.batch_size:
+            raise ValueError("micro_batch_size must be positive and no greater than batch_size")
 
     @property
     def total_iterations(self):

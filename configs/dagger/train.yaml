@@ -10,8 +10,9 @@ training:
   num_envs: 32
   rollout_steps: 32
   batch_size: 256
+  micro_batch_size: null  # Set to 64 to accumulate four backwards per optimizer step.
   updates_per_iteration: 20
-  buffer_capacity: 50000
+  buffer_capacity: 10000
   current_fraction: 0.5
   visual_warmup_iterations: 500
   joint_warmup_iterations: 500
@@ -22,6 +23,7 @@ training:
   weight_decay: 0.0001
   max_grad_norm: 1.0
   save_interval: 100
+  keep_last_checkpoints: 2
   log_interval: 10
 
 # Inherit teacher scene, actions, observations, references, rewards, and randomizations.

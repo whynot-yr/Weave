@@ -33,7 +33,7 @@ variants of the same original motion should stay in the same split.
 
 The independent YAML is **not** a Hydra config. Edit `training` in
 [train.yaml](../../configs/dagger/train.yaml), or use the supported CLI options
-`--num_envs`, `--seed`, `--device`, `--output_dir`, and `--max_iterations`.
+`--num_envs`, `--seed`, `--device`, `--output_dir`, `--micro_batch_size`, and `--max_iterations`.
 The latter limits this invocation without changing the stage schedule, which is
 useful for a short smoke run followed by resume.
 
@@ -79,14 +79,20 @@ clipping, scaling, offsets, and mimic joints are applied by the environment.
 `last_action` is always the actual executed action.
 
 Each iteration collects 32 steps per environment and performs 20 AdamW updates
-with batch size 256. Default learning rates are 1e-4 for CNN and 1e-5 for the
+with effective batch size 256 across 32 environments (1,024 new samples).
+`micro_batch_size: null` processes the full batch. On a GPU with limited memory,
+set it to 64 (or pass `--micro_batch_size 64`) to accumulate four backwards
+before each optimizer update. Losses are weighted by sample count, including
+an uneven final microbatch, and gradient clipping happens only after accumulation.
+This retains 20 optimizer steps per iteration, rather than multiplying them by four.
+Default learning rates are 1e-4 for CNN and 1e-5 for the
 transferred MLP/SimBa parameters; gradient norm is clipped to 1.0. Unlocking
 the transferred parameters preserves the CNN's AdamW state.
 
 Minibatches use 50% current-rollout samples and 50% historical samples; the first
 iteration uses only current samples. After updating, current samples enter a
-50,000-sample reservoir. Failed trajectories are retained. CPU replay stores
-depth as uint16 (about 1.53 GiB for depth alone at default capacity), vectors and
+10,000-sample reservoir. Failed trajectories are retained. CPU replay stores
+depth as uint16 (312.5 MiB for depth alone at default capacity), vectors and
 raw teacher actions, plus clip/episode/step/execution metadata. CNN latents are
 recomputed at every update.
 
@@ -97,7 +103,15 @@ Runs default to `logs/dagger/<timestamp>/` and contain:
 - `params/env.yaml`, `params/dagger.yaml`: resolved environment and training contracts.
 - `tensorboard/`, `metrics.jsonl`: MSE, beta, execution fractions, rewards, resets, and replay size.
 - `model_<completed_iterations>.pt`: student, AdamW, stage counters, replay, RNG states, and teacher identity.
+- `student_<stage>.pt`: lightweight student weights and evaluation metadata at each completed stage; no replay or optimizer.
 - `student_policy.pt`: student-only TorchScript export after a completed invocation.
+
+Full checkpoints are saved every 100 iterations by default and at invocation end.
+Only the newest `keep_last_checkpoints: 2` numbered full checkpoints are retained
+in that run's directory. Older full snapshots are removed only after the new
+checkpoint is successfully committed. Lightweight stage weights are retained
+and can be passed to `scripts/dagger/eval.py --checkpoint`; they cannot resume training.
+No separate archive of all collected depth images is written.
 
 ```bash
 python scripts/dagger/train.py --resume logs/dagger/<run>/model_100.pt
@@ -110,6 +124,10 @@ in each checkpoint, so full checkpoints are large. Simulator physics is not
 serialized: resume starts new episodes while preserving the learning state.
 Snapshots are written only at completed rollout/update boundaries. Interrupted
 partial iterations should be restarted from the last complete snapshot.
+The memory-only `--micro_batch_size` override can be changed on resume without
+changing effective batch size, stage durations, or optimizer step counts.
+Metrics include process peak RAM and PyTorch peak allocated/reserved CUDA memory;
+use `nvidia-smi` as well because renderer allocations are outside PyTorch's counters.
 
 ## Evaluate
 

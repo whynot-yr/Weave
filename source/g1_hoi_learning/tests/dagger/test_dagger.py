@@ -291,6 +291,7 @@ def test_runner_all_stages_include_student_execution(spec, teacher, observations
         joint_warmup_iterations=1,
         decay_iterations=2,
         student_iterations=1,
+        save_interval=1,
     )
     runner = DaggerRunner(FakeEnv(observations), teacher, student, cfg, str(tmp_path), {}, {}, {})
     runner.learn(observations)
@@ -300,3 +301,80 @@ def test_runner_all_stages_include_student_execution(spec, teacher, observations
     assert not runner.buffer.arrays["executed_teacher"][16:20].any()
     for key, value in teacher.state_dict().items():
         torch.testing.assert_close(value, teacher_before[key], rtol=0, atol=0)
+    assert sorted(path.name for path in tmp_path.glob("model_*.pt")) == ["model_4.pt", "model_5.pt"]
+    for stage in ("visual_warmup", "joint_warmup", "dagger_decay", "student_only"):
+        weights = torch.load(tmp_path / f"student_{stage}.pt", weights_only=False)
+        assert weights["kind"] == "student_weights" and weights["completed_stage"] == stage
+        assert "replay" not in weights and "optimizer_state_dict" not in weights
+        assert {
+            "actor_spec",
+            "student_state_dict",
+            "resolved_env",
+            "environment_contract",
+            "teacher_info",
+        } <= weights.keys()
+    with pytest.raises(ValueError, match="full model"):
+        runner.load(str(tmp_path / "student_visual_warmup.pt"))
+
+
+@pytest.mark.parametrize("stage", ["visual_warmup", "joint_warmup"])
+@pytest.mark.parametrize("micro_size", [2, 4])
+def test_microbatch_accumulation_matches_full_batch(spec, teacher, observations, stage, micro_size):
+    student = StudentWeaveActor(spec)
+    student.initialize_from_teacher(teacher)
+    accumulated = copy.deepcopy(student)
+    settings = dict(batch_size=6, updates_per_iteration=2, cnn_lr=1e-3)
+    full = DaggerAlgorithm(student, DaggerTrainConfig(**settings))
+    micro = DaggerAlgorithm(accumulated, DaggerTrainConfig(**settings, micro_batch_size=micro_size))
+    full.set_stage(stage)
+    micro.set_stage(stage)
+    current = capture_samples(observations, torch.randn(4, spec["num_actions"]), {})
+    full_result = full.update(current, ReservoirBuffer(10, 42), "cpu")
+    micro_result = micro.update(current, ReservoirBuffer(10, 42), "cpu")
+    assert micro_result["action_mse"] == pytest.approx(full_result["action_mse"], rel=1e-5, abs=1e-7)
+    for original, other in zip(student.parameters(), accumulated.parameters()):
+        torch.testing.assert_close(original, other, rtol=1e-4, atol=2e-6)
+        if original.requires_grad:
+            assert micro.optimizer.state[other]["step"] == full.optimizer.state[original]["step"] == 2
+
+
+def test_checkpoint_retention_preserves_old_snapshots_on_save_failure(
+    spec, teacher, observations, tmp_path, monkeypatch
+):
+    cfg = DaggerTrainConfig(num_envs=4)
+    runner = DaggerRunner(FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {}, {}, {})
+    runner.iteration = 9
+    runner.save(tmp_path / "model_9.pt")
+    runner.iteration = 10
+    runner.save(tmp_path / "model_10.pt")
+    unrelated = tmp_path / "model_notes.pt"
+    unrelated.write_text("keep")
+    runner.iteration = 100
+    with monkeypatch.context() as patch:
+
+        def failed_save(state, path):
+            path.write_bytes(b"incomplete")
+            raise OSError("simulated save failure")
+
+        patch.setattr(torch, "save", failed_save)
+        with pytest.raises(OSError, match="simulated save failure"):
+            runner.save(tmp_path / "model_100.pt")
+    assert (tmp_path / "model_9.pt").exists() and (tmp_path / "model_10.pt").exists()
+    assert not (tmp_path / "model_100.pt").exists()
+    runner.save(tmp_path / "model_100.pt")
+    assert not (tmp_path / "model_9.pt").exists()
+    assert (tmp_path / "model_10.pt").exists() and (tmp_path / "model_100.pt").exists()
+    assert unrelated.read_text() == "keep"
+
+
+def test_resume_allows_microbatch_change_but_preserves_training_contract(spec, teacher, observations, tmp_path):
+    cfg = DaggerTrainConfig(num_envs=4)
+    runner = DaggerRunner(
+        FakeEnv(observations), teacher, StudentWeaveActor(spec), cfg, str(tmp_path), {"sha256": "fixture"}, {}, {}
+    )
+    runner.save(tmp_path / "model_0.pt")
+    cfg.micro_batch_size = 64
+    runner.load(str(tmp_path / "model_0.pt"))
+    cfg.batch_size = 128
+    with pytest.raises(ValueError, match="original training"):
+        runner.load(str(tmp_path / "model_0.pt"))

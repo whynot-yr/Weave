@@ -19,6 +19,7 @@ parser.add_argument("--teacher_env_config")
 parser.add_argument("--resume", help="DAgger model checkpoint; resumes optimizer, stages and replay")
 parser.add_argument("--output_dir")
 parser.add_argument("--num_envs", type=int)
+parser.add_argument("--micro_batch_size", type=int, help="Accumulate smaller backwards; batch_size stays unchanged")
 parser.add_argument("--seed", type=int)
 parser.add_argument("--motion_files", nargs="+")
 parser.add_argument(
@@ -54,12 +55,14 @@ def main():
     config = read_yaml(args.config)
     resume_state = torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
     if resume_state:
+        if resume_state.get("kind", "training") != "training":
+            raise ValueError("--resume requires a full model_<iteration>.pt checkpoint, not student weights")
         # The runner loads replay/weights once later; don't keep a second multi-GiB replay copy alive.
         resume_state = {key: resume_state[key] for key in ("train_cfg", "teacher_info", "resolved_env")}
     # Resuming uses the saved schedule and teacher configs, not today's YAML defaults.
     settings = resume_state["train_cfg"] if resume_state else config.get("training", {})
     settings = dict(settings)
-    for key in ("num_envs", "seed"):
+    for key in ("num_envs", "seed", "micro_batch_size"):
         if getattr(args, key) is not None:
             settings[key] = getattr(args, key)
     cfg = DaggerTrainConfig(**settings)
