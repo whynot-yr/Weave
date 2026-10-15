@@ -10,6 +10,15 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+# Containers can expose the NVIDIA Vulkan ICD in both search directories,
+# causing duplicate GPU indices. Respect explicit loader overrides.
+if not os.environ.get("VK_ICD_FILENAMES") and not os.environ.get("VK_DRIVER_FILES"):
+    for icd_path in (Path("/etc/vulkan/icd.d/nvidia_icd.json"), Path("/usr/share/vulkan/icd.d/nvidia_icd.json")):
+        if icd_path.is_file():
+            os.environ["VK_ICD_FILENAMES"] = str(icd_path)
+            print(f"[DAgger] Vulkan ICD: {icd_path}", flush=True)
+            break
+
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
