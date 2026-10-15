@@ -1,4 +1,4 @@
-"""Synchronous student rollouts followed by current-window action distillation."""
+"""Student Gaussian rollouts and the restored 3904770 PPO+BC training loop."""
 
 from __future__ import annotations
 
@@ -20,10 +20,9 @@ from .algorithm import DaggerAlgorithm
 from .config import DaggerTrainConfig
 from .distributed import DistributedContext
 from .networks import StudentWeaveActor, TeacherWeaveActor, export_student
-from .storage import RolloutBuffer
 
-SCHEMA = "weave-depth-dagger-v2"
-STUDENT_SCHEMAS = {SCHEMA, "weave-depth-dagger-v1"}
+SCHEMA = "weave-depth-dagger-v3"
+STUDENT_SCHEMAS = {SCHEMA, "weave-depth-dagger-v2", "weave-depth-dagger-v1"}
 
 
 def file_sha256(path: str) -> str:
@@ -46,6 +45,8 @@ class DaggerRunner:
         environment_contract: dict,
         resolved_env: dict,
         context: DistributedContext | None = None,
+        *,
+        policy=None,
     ):
         self.env, self.teacher, self.student, self.cfg = env, teacher, student, cfg
         self.device = str(next(student.parameters()).device)
@@ -61,8 +62,11 @@ class DaggerRunner:
         self.teacher_info = copy.deepcopy(teacher_info)
         self.environment_contract = copy.deepcopy(environment_contract)
         self.resolved_env = copy.deepcopy(resolved_env)
-        self.algorithm = DaggerAlgorithm(student, cfg, self.context)
-        self.rollout = RolloutBuffer(env.num_envs, cfg.rollout_steps)
+        if policy is None or policy.actor is not student or policy.teacher is not teacher:
+            raise ValueError("Supply the teacher-initialized Actor-Critic wrapping this student and teacher")
+        self.policy = policy
+        self.algorithm = DaggerAlgorithm(policy, cfg, self.context)
+        self.rollout = None
         self.iteration = 0  # NEXT iteration; save only at completed rollout/update boundaries.
         self.total_transitions = 0
         self.total_optimizer_updates = 0
@@ -85,13 +89,20 @@ class DaggerRunner:
 
         self.context.rank_zero_call(create_writer)
         obs = initial_obs
+        if self.algorithm.storage is None:
+            self.context.all_call(
+                lambda: self.algorithm.init_storage(
+                    "rl", self.env.num_envs, self.cfg.rollout_steps, obs, [self.student.spec["num_actions"]]
+                )
+            )
+            self.rollout = self.algorithm.storage
         env_ids = torch.arange(self.env.num_envs, device=self.device) + self.context.rank * self.env.num_envs
         try:
             while self.iteration < end and self.context.all_running(is_running()):
                 start = time.perf_counter()
                 if self.device.startswith("cuda"):
                     torch.cuda.reset_peak_memory_stats(self.device)
-                self.student.eval()
+                self.policy.eval()
                 self.rollout.clear()
                 reward_sum, done_count, rollout_mse = 0.0, 0, 0.0
                 for _ in range(self.cfg.rollout_steps):
@@ -101,9 +112,6 @@ class DaggerRunner:
                     def collect_step():
                         with torch.no_grad():
                             a_teacher = self.teacher(obs)
-                            a_student = self.student(obs)  # Raw module: no DDP collectives during inference.
-                            if not torch.isfinite(a_student).all():
-                                raise FloatingPointError("Non-finite student rollout action")
                             command = self.env.unwrapped.command_manager.get_term("motion")
                             metadata = {
                                 "clip_id": command.env_clip,
@@ -112,9 +120,10 @@ class DaggerRunner:
                                 "episode_id": self.episode_ids,
                                 "episode_step": self.episode_steps,
                             }
-                            self.rollout.add(obs, a_teacher, metadata)
-                            error = (a_student - a_teacher).square().mean().item()
-                            next_obs, rewards, dones, _ = self.env.step(a_student)
+                            a_student = self.algorithm.act(obs, metadata)
+                            error = (self.policy.action_mean - a_teacher).square().mean().item()
+                            next_obs, rewards, dones, extras = self.env.step(a_student)
+                            self.algorithm.process_env_step(next_obs, rewards, dones, extras)
                             self.episode_steps += 1
                             self.episode_ids += dones.long()
                             self.episode_steps[dones.bool()] = 0
@@ -128,7 +137,9 @@ class DaggerRunner:
                 if not self.context.all_running(is_running()):
                     return
                 training_start = time.perf_counter()
-                losses = self.algorithm.update(self.rollout, self.device)
+                with torch.no_grad():
+                    self.algorithm.compute_returns(obs)
+                losses = self.algorithm.update()
                 training_seconds = time.perf_counter() - training_start
                 totals = self.context.sum(
                     torch.tensor(
@@ -178,7 +189,9 @@ class DaggerRunner:
                 if self.context.rank == 0 and (self.iteration % self.cfg.log_interval == 0 or self.iteration == 1):
                     print(
                         f"[DAgger] {self.iteration}/{end} "
-                        f"mse={losses['train_action_mse']:.6f} global_samples={global_samples} "
+                        f"bc={losses['train_action_mse']:.6f} ppo={losses['surrogate']:.6f} "
+                        f"value={losses['value_function']:.6f} alpha={losses['bc_coef']:.4f} "
+                        f"global_samples={global_samples} "
                         f"updates={losses['optimizer_updates']} seconds={metrics['seconds']:.2f}",
                         flush=True,
                     )
@@ -215,7 +228,7 @@ class DaggerRunner:
         self.context.rank_zero_call(write)
 
     def load_student(self, path: str):
-        """Warm start v1/v2 weights with a fresh optimizer and training counters."""
+        """Explicit optional warm start; default training initializes from the teacher."""
         self.context.all_call(lambda: self._load_student(path))
 
     def _load_student(self, path: str):
@@ -249,6 +262,15 @@ class DaggerRunner:
         state.update(
             {
                 "kind": "training",
+                "critic_spec": self.policy.critic_spec,
+                "critic_state_dict": self.policy.critic.state_dict(),
+                "critic_normalizer_state_dict": self.policy.critic_obs_normalizer.state_dict(),
+                "action_std": self.policy.std.detach().cpu(),
+                "algorithm_state": {
+                    "iteration": self.algorithm._it,
+                    "bc_coef": self.algorithm.bc_coef,
+                    "learning_rate": self.algorithm.learning_rate,
+                },
                 "optimizer_state_dict": self.algorithm.optimizer.state_dict(),
                 "train_cfg": asdict(self.cfg),
                 "total_transitions": self.total_transitions,
@@ -287,8 +309,8 @@ class DaggerRunner:
             )
         if state.get("world_size", 1) != self.context.world_size:
             raise ValueError("Resume requires the same world size; use --student_checkpoint to start a new run")
-        if state["actor_spec"] != self.student.spec:
-            raise ValueError("Incompatible DAgger actor")
+        if state["actor_spec"] != self.student.spec or state["critic_spec"] != self.policy.critic_spec:
+            raise ValueError("Incompatible DAgger actor or critic")
         saved_cfg = asdict(DaggerTrainConfig(**state["train_cfg"]))
         current_cfg = asdict(self.cfg)
         # Memory/save controls may change; effective batches and the schedule may not.
@@ -300,14 +322,32 @@ class DaggerRunner:
         if state["teacher_info"]["sha256"] != self.teacher_info["sha256"]:
             raise ValueError("Resume teacher checkpoint differs")
         self.student.load_state_dict(state["student_state_dict"], strict=True)
+        self.policy.critic.load_state_dict(state["critic_state_dict"], strict=True)
+        self.policy.critic_obs_normalizer.load_state_dict(state["critic_normalizer_state_dict"], strict=True)
+        with torch.no_grad():
+            self.policy.std.copy_(state["action_std"].to(self.device))
+        # _load is already inside all_call: keep validation local until it returns.
+        if not torch.isfinite(self.policy.std).all() or (self.policy.std <= 0).any():
+            raise ValueError("Invalid restored action standard deviation")
         self.algorithm.optimizer.load_state_dict(state["optimizer_state_dict"])
+        algorithm_state = state["algorithm_state"]
+        if algorithm_state["iteration"] != state["next_iteration"]:
+            raise ValueError("Checkpoint BC schedule does not match its completed iteration")
+        self.algorithm.set_iteration(algorithm_state["iteration"])
+        if abs(self.algorithm.bc_coef - algorithm_state["bc_coef"]) > 1e-12:
+            raise ValueError("Checkpoint BC coefficient differs from its saved schedule")
+        self.algorithm.learning_rate = algorithm_state["learning_rate"]
+        for group in self.algorithm.optimizer.param_groups:
+            group["lr"] = self.algorithm.learning_rate
         self.iteration = state["next_iteration"]
         self.total_transitions = state["total_transitions"]
         self.total_optimizer_updates = state["total_optimizer_updates"]
         rank_state = state["rank_states"][self.context.rank] if "rank_states" in state else state
         self.episode_ids.copy_(rank_state["episode_ids"].to(self.device) + 1)
         self.episode_steps.zero_()  # Physics restarts on resume.
-        self.rollout.clear()
+        if self.rollout is not None:
+            self.rollout.clear()
+        self.algorithm.transition.clear()
         rng = rank_state["rng"]
         torch.set_rng_state(rng["torch"])
         np.random.set_state(rng["numpy"])

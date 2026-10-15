@@ -124,9 +124,9 @@ class StudentWeaveActor(nn.Module):
         return self
 
     def set_dagger_trainable(self):
-        """Adapt CNN and SimBa while retaining the transferred vector branches."""
+        """Train the complete student actor while retaining fixed normalization."""
         self.depth_encoder.requires_grad_(True)
-        self.vector_encoders.requires_grad_(False)
+        self.vector_encoders.requires_grad_(True)
         self.vector_normalizers.requires_grad_(False)
         self.backbone.requires_grad_(True)
 

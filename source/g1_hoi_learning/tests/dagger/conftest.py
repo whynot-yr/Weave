@@ -22,6 +22,8 @@ from g1_hoi_learning.algorithms.dagger.networks import (
     make_actor,
     normalizer,
 )
+from g1_hoi_learning.algorithms.distillation.networks import SimBaActorCriticTeacher
+from g1_hoi_learning.algorithms.networks import build_group_backbone
 
 
 @pytest.fixture
@@ -53,11 +55,40 @@ def teacher(spec):
         norm.count.fill_(100)
     state = {f"actor.{k}": v for k, v in actor.state_dict().items()}
     state.update({f"actor_obs_normalizer.{k}": v for k, v in norm.state_dict().items()})
-    return TeacherWeaveActor(spec, state)
+    teacher = TeacherWeaveActor(spec, state)
+    groups = ["ref_motion_body", "ref_motion_object", "object_state", "robot_privileged"]
+    dims = dict(spec["group_dims"], robot_privileged=8)
+    encoders = dict(spec["encoder_specs"], robot_privileged={"type": "mlp", "hidden_dims": [16]})
+    teacher.critic_spec = {
+        "groups": groups,
+        "group_dims": {g: dims[g] for g in groups},
+        "encoder_specs": encoders,
+        "latent_dim": 8,
+        "hidden_dim": 16,
+        "num_blocks": 2,
+        "expansion": 1,
+        "normalize": True,
+    }
+    critic = build_group_backbone({g: torch.empty(1, dims[g]) for g in groups}, groups, encoders, 8, 1, 16, 2, 1)
+    critic_norm = normalizer(sum(dims[g] for g in groups), True)
+    state.update({f"critic.{k}": v for k, v in critic.state_dict().items()})
+    state.update({f"critic_obs_normalizer.{k}": v for k, v in critic_norm.state_dict().items()})
+    teacher.tracker_state = state
+    return teacher
 
 
 @pytest.fixture
 def observations(spec):
     obs = {g: torch.randn(4, dim) for g, dim in spec["group_dims"].items()}
+    obs["robot_privileged"] = torch.randn(4, 8)
     obs["head_depth"] = torch.full((4, 1, 128, 128), 0.2)
     return obs
+
+
+def make_policy(spec, teacher, student=None):
+    from g1_hoi_learning.algorithms.dagger.networks import StudentWeaveActor
+
+    if student is None:
+        student = StudentWeaveActor(spec)
+        student.initialize_from_teacher(teacher)
+    return SimBaActorCriticTeacher(student, teacher, teacher.critic_spec, teacher.tracker_state)

@@ -13,7 +13,11 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--config", default="configs/dagger/eval.yaml")
-parser.add_argument("--checkpoint", required=True, help="v1/v2 full DAgger checkpoint or lightweight student weights")
+parser.add_argument(
+    "--checkpoint",
+    required=True,
+    help="v1/v2/v3 DAgger checkpoint or lightweight student weights (mean-action evaluation)",
+)
 parser.add_argument("--policy", choices=("student", "teacher"), default="student")
 parser.add_argument("--teacher_checkpoint", help="Relocated teacher baseline checkpoint")
 parser.add_argument("--motion_files", nargs="+", help="Held-out clips for one object")

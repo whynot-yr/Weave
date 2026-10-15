@@ -1,5 +1,5 @@
-# Standalone configuration: scripts/dagger/train.py --config configs/dagger/train.yaml
-# Teacher run params/agent.yaml and params/env.yaml are discovered alongside the checkpoint.
+# Current student perception + PPO/BC from commit 3904770.
+# Fresh runs initialize actor/vector normalizers/critic from the teacher; CNN is new.
 teacher:
   checkpoint: null
   agent_config: null
@@ -7,22 +7,33 @@ teacher:
 
 training:
   seed: 42
-  num_envs: 4096  # PER GPU/rank; two DDP ranks collect 8192 environments total.
-  rollout_steps: 16
-  num_learning_epochs: 2
-  num_mini_batches: 32  # 2048 samples/rank/update; DDP global batch=4096, still 64 updates.
-  micro_batch_size: 128  # PER RANK; 16 backwards, one gradient sync and optimizer step.
+  num_envs: 4096                # PER GPU/rank; 8192 total on two GPUs.
+  rollout_steps: 32
+  num_learning_epochs: 5
+  num_mini_batches: 4           # 32768 samples/rank/update; 20 updates/iteration.
+  micro_batch_size: 128         # PER RANK; 256 backwards per optimizer update.
   num_iterations: 11000
-  cnn_lr: 0.0001
-  transferred_lr: 0.00001
-  weight_decay: 0.0001
+
+  init_noise_std: 0.2
+  bc_coef: 1.0
+  bc_coef_anneal_iters: 6000
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_param: 0.2
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  entropy_coef: 0.0005
+  learning_rate: 0.0001         # Existing Muon + AdamW, as in 3904770.
+  schedule: adaptive
+  desired_kl: 0.01
+  weight_decay: 0.01
   max_grad_norm: 1.0
-  save_interval: 1000
-  keep_last_checkpoints: null  # Keep all checkpoints; never prune older numbered models.
+
+  save_interval: 100
+  keep_last_checkpoints: null   # Keep every numbered checkpoint.
   log_interval: 10
 
-# Inherit teacher scene, actions, observations, references, rewards, and randomizations.
-# Allowed overrides: motion files/RSI/debug_vis, events, and proprio corruption.
+# Keep the current environment/motions/rewards/observations and depth processing.
 env_overrides:
   commands:
     motion:

@@ -1,1 +1,1 @@
-"""Visual Weave action DAgger, independent of the PPO training runner."""
+"""Current visual student and runtime adapters for historical PPO+BC DAgger."""

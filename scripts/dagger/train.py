@@ -1,4 +1,4 @@
-"""Train depth Student-Weave online: student rollouts, current-window CNN/SimBa updates."""
+"""Train current depth Student-Weave with the historical 3904770 PPO+BC algorithm."""
 
 from __future__ import annotations
 
@@ -27,8 +27,10 @@ parser.add_argument("--teacher_checkpoint")
 parser.add_argument("--teacher_agent_config")
 parser.add_argument("--teacher_env_config")
 initialization = parser.add_mutually_exclusive_group()
-initialization.add_argument("--resume", help="v2 model checkpoint; resume optimizer, counters and RNG")
-initialization.add_argument("--student_checkpoint", help="v1/v2 student weights; start a fresh training run")
+initialization.add_argument("--resume", help="v3 PPO+BC checkpoint; resume optimizer, BC schedule, counters and RNG")
+initialization.add_argument(
+    "--student_checkpoint", help="Optional student weights; default initialization is from the teacher"
+)
 parser.add_argument("--output_dir")
 parser.add_argument(
     "--distributed", action="store_true", help="Enable DDP under torchrun; auto-enabled for WORLD_SIZE > 1"
@@ -70,6 +72,7 @@ from g1_hoi_learning.algorithms.dagger.networks import (
     actor_spec,
 )
 from g1_hoi_learning.algorithms.dagger.runner import SCHEMA, DaggerRunner, file_sha256
+from g1_hoi_learning.algorithms.distillation.networks import SimBaActorCriticTeacher, critic_spec
 
 from isaaclab.utils.io import dump_yaml
 
@@ -178,6 +181,11 @@ def main(context):
         torch.manual_seed(cfg.seed)
         student = context.all_call(lambda: StudentWeaveActor(spec).to(device))
         context.all_call(lambda: student.initialize_from_teacher(teacher))
+        policy = context.all_call(
+            lambda state=teacher_state: SimBaActorCriticTeacher(
+                student, teacher, critic_spec(agent_config, obs), state["model_state_dict"], cfg.init_noise_std
+            ).to(device)
+        )
         teacher_info = {
             "checkpoint": checkpoint,
             "sha256": context.all_call(lambda: file_sha256(checkpoint)),
@@ -193,6 +201,7 @@ def main(context):
             context.all_call(lambda: environment_contract(env)),
             context.all_call(env_cfg.to_dict),
             context,
+            policy=policy,
         )
         if args.resume:
             runner.load(args.resume)
@@ -208,6 +217,8 @@ def main(context):
                         "training": asdict(cfg),
                         "teacher": teacher_info,
                         "student": spec,
+                        "critic": policy.critic_spec,
+                        "algorithm_source_commit": "3904770889ee67b34113df01f3f5533add0a468b",
                         "distributed": {"world_size": context.world_size, "num_envs_per_rank": cfg.num_envs},
                     },
                 )

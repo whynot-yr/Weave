@@ -1,4 +1,4 @@
-"""Preallocated CPU storage for one rollout, with uint16 depth and no history."""
+"""Legacy action-label storage; active PPO uses distillation.storage.DepthRolloutStorage."""
 
 from __future__ import annotations
 
