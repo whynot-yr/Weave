@@ -54,6 +54,17 @@ def test_terminal_on_stride_boundary_is_not_duplicated(tmp_path):
     assert recorder.finish(complete=True)["video_frame_steps"] == [0, 2]
 
 
+def test_repeated_clip_trials_have_distinct_videos(tmp_path):
+    frame = np.ones((16, 16, 3), dtype=np.uint8)
+    recorder = ClipVideoRecorder(tmp_path, VideoConfig(width=16, height=16), 0.02, lambda: frame, FakeWriter)
+    paths = []
+    for trial_id in (0, 1):
+        recorder.start(0, "same_clip", trial_id=trial_id)
+        paths.append(recorder.finish(complete=False)["video_path"])
+    assert paths[0] != paths[1]
+    assert all((tmp_path / path).is_file() for path in paths)
+
+
 def test_interrupted_video_is_closed_and_marked_incomplete(tmp_path):
     frame = np.ones((16, 16, 3), dtype=np.uint8)
     recorder = ClipVideoRecorder(tmp_path, VideoConfig(width=16, height=16), 0.02, lambda: frame, FakeWriter)

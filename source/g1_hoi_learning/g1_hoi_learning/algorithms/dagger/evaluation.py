@@ -2,7 +2,52 @@
 
 from __future__ import annotations
 
+import math
+
+import numpy as np
 import torch
+
+PERTURBATION_PROFILES = {
+    "none": (0.0, 0.0),
+    "initial_small": (0.002, 0.5),
+    "initial_medium": (0.005, 1.0),
+    "initial_large": (0.010, 2.0),
+}
+
+
+def build_eval_trials(
+    clip_names: list[str], clip_ids: list[int] | None, num_trials: int, seed: int, perturbation: str
+) -> list[dict]:
+    """Sample conditions by (seed, clip, trial), independent of batching/selection order."""
+    if num_trials < 1:
+        raise ValueError("num_trials must be positive")
+    if not 0 <= seed < 2**32:
+        raise ValueError("Evaluation seed must be in [0, 2**32 - 1]")
+    if perturbation not in PERTURBATION_PROFILES:
+        raise ValueError(f"Unknown perturbation profile: {perturbation}")
+    selected = list(range(len(clip_names))) if clip_ids is None else list(clip_ids)
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("clip_ids must be nonempty and contain no duplicates")
+    if any(i < 0 or i >= len(clip_names) for i in selected):
+        raise ValueError(f"clip_ids must be in [0, {len(clip_names) - 1}]")
+    xy_m, yaw_deg = PERTURBATION_PROFILES[perturbation]
+    bounds = np.array([xy_m, xy_m, math.radians(yaw_deg)])
+    trials = []
+    for clip_id in selected:
+        for trial_id in range(num_trials):
+            trial_seed = int(np.random.SeedSequence([seed, clip_id, trial_id]).generate_state(1, dtype=np.uint64)[0])
+            offsets = (np.random.default_rng(trial_seed).uniform(-1, 1, 3) * bounds).astype(np.float32)
+            trials.append(
+                {
+                    "clip_id": clip_id,
+                    "name": clip_names[clip_id],
+                    "trial_id": trial_id,
+                    "trial_seed": trial_seed,
+                    "perturbation": perturbation,
+                    "object_pose_offset": dict(zip(("x_m", "y_m", "yaw_rad"), offsets.tolist())),
+                }
+            )
+    return trials
 
 
 def assign_eval_clips(command, clip_ids: list[int]):
@@ -17,6 +62,18 @@ def assign_eval_clips(command, clip_ids: list[int]):
     padded = torch.cat((ids, ids[-1:].expand(command.num_envs - len(clip_ids))))
     command._eval_env_clip.copy_(padded)
     command.cfg.eval_clip_ids = padded.tolist()
+
+
+def assign_eval_trials(command, trials: list[dict]):
+    """Assign clips and fixed per-trial offsets before reset; pad unused environments."""
+    assign_eval_clips(command, [trial["clip_id"] for trial in trials])
+    offsets = torch.tensor(
+        [[trial["object_pose_offset"][key] for key in ("x_m", "y_m", "yaw_rad")] for trial in trials],
+        device=command._eval_object_pose_offsets.device,
+        dtype=command._eval_object_pose_offsets.dtype,
+    )
+    padded = torch.cat((offsets, offsets[-1:].expand(command.num_envs - len(trials), -1)))
+    command._eval_object_pose_offsets.copy_(padded)
 
 
 class ClipEvaluator:
@@ -104,9 +161,28 @@ def summarize(rows: list[dict], metric_keys: list[str]) -> dict:
             result[key] = sum(row[key] * row[weight] for row in selected) / count if count else None
         return result
 
+    def success_stats(selected):
+        n = len(selected)
+        successes = sum(row["success"] for row in selected)
+        p, z = successes / n, 1.959963984540054
+        denominator = 1 + z * z / n
+        center = (p + z * z / (2 * n)) / denominator
+        radius = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+        return {
+            "num_trials": n,
+            "num_finished_trials": sum(row["finished"] for row in selected),
+            "num_successes": successes,
+            "success_rate": p,
+            "success_rate_ci95": [max(0.0, center - radius), min(1.0, center + radius)],
+        }
+
+    groups = {}
+    for i, row in enumerate(rows):
+        groups.setdefault(row.get("clip_id", i), []).append(row)
+
     return {
-        "num_clips": len(rows),
-        "success_rate": sum(r["success"] for r in rows) / len(rows),
+        "num_clips": len(groups),
+        **success_stats(rows),
         "progress_rate": sum(r["progress"] for r in rows) / len(rows),
         "complete": all(r["finished"] for r in rows),
         "metric_keys": metric_keys,
@@ -117,4 +193,18 @@ def summarize(rows: list[dict], metric_keys: list[str]) -> dict:
             for cause in sorted({r["cause"] for r in rows if not r["success"]})
         },
         "clips": rows,
+        "clip_summary": [
+            {
+                "clip_id": clip_id,
+                "name": selected[0].get("name"),
+                **success_stats(selected),
+                "progress_rate": sum(row["progress"] for row in selected) / len(selected),
+                "metrics_all": aggregate(selected),
+                "failures": {
+                    cause: sum(row["cause"] == cause for row in selected)
+                    for cause in sorted({row["cause"] for row in selected if not row["success"]})
+                },
+            }
+            for clip_id, selected in groups.items()
+        ],
     }

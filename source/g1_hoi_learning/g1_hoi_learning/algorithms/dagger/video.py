@@ -68,14 +68,15 @@ class ClipVideoRecorder:
     def active(self):
         return self.writer is not None
 
-    def start(self, clip_id: int, motion_name: str):
+    def start(self, clip_id: int, motion_name: str, trial_id: int | None = None):
         if self.active:
             raise RuntimeError("Finish the previous video before starting another clip")
         # Clip id ensures uniqueness even for duplicate or sanitized motion names.
         safe_name = re.sub(r"[^\w.-]+", "_", str(motion_name)).strip("._")[:100] or "motion"
         directory = self.output_dir / "videos"
         directory.mkdir(parents=True, exist_ok=True)
-        self.path = directory / f"clip_{clip_id:04d}_{safe_name}.mp4"
+        suffix = "" if trial_id is None else f"_trial_{trial_id:04d}"
+        self.path = directory / f"clip_{clip_id:04d}_{safe_name}{suffix}.mp4"
         self.temporary = self.path.with_name(self.path.stem + ".partial.mp4")
         self.steps, self.frame_steps, self.terminal_seen = 0, [], False
         first_frame = self._read_frame()

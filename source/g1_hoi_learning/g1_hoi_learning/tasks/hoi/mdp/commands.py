@@ -34,6 +34,7 @@ from isaaclab.utils.math import (
     quat_error_magnitude,
 )
 
+from g1_hoi_learning.algorithms.perturbations import offset_object_pose
 from g1_hoi_learning.objects import ASSET_DIR
 
 
@@ -201,6 +202,8 @@ class MotionCommand(CommandTerm):
 
         # clip-wise evaluation
         if self.cfg.eval_mode:
+            # Assigned by the evaluator before each reset; never alter reference data.
+            self._eval_object_pose_offsets = torch.zeros(self.num_envs, 3, device=self.device)
             if self.motion.num_objects != 1:
                 raise ValueError(
                     f"eval_mode requires a single-object motion set, got {self.motion.num_objects} objects "
@@ -498,7 +501,13 @@ class MotionCommand(CommandTerm):
             new_frames.object_lin_vel_w,
             new_frames.object_ang_vel_w,
         ], dim=-1)
+        if self.cfg.eval_mode:
+            obj_state = offset_object_pose(obj_state, self._eval_object_pose_offsets[env_ids])
         self.object.write_root_state_to_sim(obj_state, env_ids=env_ids)
+        if self.cfg.eval_mode:
+            # env.reset() computes observations before the next command.compute().
+            # Refresh now so the first policy input uses this clip's frame zero.
+            self._refresh_caches()
 
     def _update_command(self):
         self.time_steps += 1

@@ -2,6 +2,12 @@
 num_envs: 32
 seed: 42
 motion_files: null  # Prefer an explicit held-out single-object file via --motion_files.
+clip_ids: null  # Zero-based ids; null evaluates every clip in motion_files.
+num_trials: 1  # Independent initial conditions per clip; parallelized only with --no_video.
+perturbation: none  # none / initial_small / initial_medium / initial_large
+# Uniform initial object offsets (x/y metres, world-z yaw degrees):
+# initial_small: ±0.002 m, ±0.5°; initial_medium: ±0.005 m, ±1°; initial_large: ±0.010 m, ±2°.
+# Robot state, reference trajectory, object height and velocities remain fixed.
 video:
   enabled: true
   width: 1280

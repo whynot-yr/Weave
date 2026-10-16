@@ -21,6 +21,13 @@ parser.add_argument(
 parser.add_argument("--policy", choices=("student", "teacher"), default="student")
 parser.add_argument("--teacher_checkpoint", help="Relocated teacher baseline checkpoint")
 parser.add_argument("--motion_files", nargs="+", help="Held-out clips for one object")
+parser.add_argument("--clip_ids", nargs="+", type=int, help="Zero-based clip ids; default: all clips")
+parser.add_argument("--num_trials", type=int, help="Trials per selected clip (default: 1)")
+parser.add_argument(
+    "--perturbation",
+    choices=("none", "initial_small", "initial_medium", "initial_large"),
+    help="Initial object world-x/y and world-z yaw perturbation profile (default: none)",
+)
 parser.add_argument("--num_envs", type=int, help="Maximum camera environments per evaluation batch")
 parser.add_argument("--seed", type=int)
 parser.add_argument("--output_dir")
@@ -37,7 +44,13 @@ import gymnasium as gym
 import numpy as np
 import torch
 from common import make_env_cfg, read_yaml
-from g1_hoi_learning.algorithms.dagger.evaluation import ClipEvaluator, assign_eval_clips, summarize
+from g1_hoi_learning.algorithms.dagger.evaluation import (
+    PERTURBATION_PROFILES,
+    ClipEvaluator,
+    assign_eval_trials,
+    build_eval_trials,
+    summarize,
+)
 from g1_hoi_learning.algorithms.dagger.networks import TEACHER_GROUPS, StudentWeaveActor, TeacherWeaveActor
 from g1_hoi_learning.algorithms.dagger.runner import STUDENT_SCHEMAS, file_sha256
 from g1_hoi_learning.algorithms.dagger.video import ClipVideoRecorder, VideoConfig
@@ -74,6 +87,11 @@ def main():
             names.extend(str(name) for name in data["motion_names"])
     if not names:
         raise ValueError("No evaluation clips")
+    num_trials = args.num_trials if args.num_trials is not None else config.get("num_trials", 1)
+    perturbation = args.perturbation if args.perturbation is not None else config.get("perturbation", "none")
+    selected_clip_ids = args.clip_ids if args.clip_ids is not None else config.get("clip_ids")
+    trials = build_eval_trials(names, selected_clip_ids, num_trials, seed, perturbation)
+    selected_clip_ids = list(dict.fromkeys(trial["clip_id"] for trial in trials))
     if args.policy == "student":
         policy = StudentWeaveActor(state["actor_spec"])
         policy.load_state_dict(state["student_state_dict"], strict=True)
@@ -91,7 +109,7 @@ def main():
     spec = state["actor_spec"]
     del state  # release serialized replay; evaluation does not need it
     rows, times, metric_keys = [], [], []
-    num_envs = 1 if video_cfg.enabled else min(batch_size, len(names))
+    num_envs = 1 if video_cfg.enabled else min(batch_size, len(trials))
     output = Path(args.output_dir or Path(args.checkpoint).resolve().parent / f"eval_{args.policy}")
     output.mkdir(parents=True, exist_ok=True)
     env_cfg = make_env_cfg(
@@ -102,7 +120,8 @@ def main():
         {"commands": {"motion": {"motion_files": motion_files}}},
         evaluation=True,
     )
-    env_cfg.commands.motion.eval_clip_ids = list(range(num_envs))
+    initial_ids = [trial["clip_id"] for trial in trials[:num_envs]]
+    env_cfg.commands.motion.eval_clip_ids = initial_ids
     if video_cfg.enabled:
         from video_recorder import EvaluationVideoCfg, read_rgb, warmup_rgb
 
@@ -116,25 +135,43 @@ def main():
             f"serial envs=1 (requested batch limit={batch_size})",
             flush=True,
         )
-    env = gym.make("G1-Inspire-HOI-Student-v0", cfg=env_cfg, render_mode="rgb_array" if video_cfg.enabled else None)
-    recorder = None
     report_metadata = {
         "checkpoint": str(Path(args.checkpoint).resolve()),
         "policy": args.policy,
         "motion_files": motion_files,
-        "requested_num_clips": len(names),
+        "seed": seed,
+        "selected_clip_ids": selected_clip_ids,
+        "requested_num_clips": len(selected_clip_ids),
+        "trials_per_clip": num_trials,
+        "requested_num_trials": len(trials),
+        "perturbation": perturbation,
+        "perturbation_bounds": {
+            "object_xy_m": PERTURBATION_PROFILES[perturbation][0],
+            "object_yaw_deg": PERTURBATION_PROFILES[perturbation][1],
+        },
         "max_batch_envs": batch_size,
         "actual_batch_envs": num_envs,
         "video": asdict(video_cfg),
     }
+    # Save sampled conditions before simulation; reuse the same seed/profile for policy comparisons.
+    (output / "trials.json").write_text(json.dumps({**report_metadata, "trials": trials}, indent=2, allow_nan=False))
+    print(
+        f"[Eval] {len(selected_clip_ids)} clips x {num_trials} trials = {len(trials)} trials; "
+        f"perturbation={perturbation}, seed={seed}, actual envs={num_envs}",
+        flush=True,
+    )
+    env = gym.make("G1-Inspire-HOI-Student-v0", cfg=env_cfg, render_mode="rgb_array" if video_cfg.enabled else None)
+    recorder = None
 
     def save_report():
         if not rows:
             return
         result = summarize(rows, metric_keys)
         result.update(report_metadata)
+        complete = len(rows) == len(trials) and all(row["finished"] for row in rows)
         result.update(
-            all_requested_clips_evaluated=len(rows) == len(names),
+            all_requested_clips_evaluated=complete,
+            all_requested_trials_evaluated=complete,
             inference_batch_ms_mean=float(np.mean(times)) if times else None,
             inference_batch_ms_p95=float(np.percentile(times, 95)) if times else None,
         )
@@ -151,9 +188,9 @@ def main():
         command = env.unwrapped.command_manager.get_term("motion")
         if list(env.unwrapped.action_manager.get_term("joint_pos")._joint_names) != action_names:
             raise ValueError("Evaluation action joint order differs from training")
-        for first in range(0, len(names), num_envs):
-            ids = list(range(first, min(first + num_envs, len(names))))
-            assign_eval_clips(command, ids)
+        for first in range(0, len(trials), num_envs):
+            batch_trials = trials[first : first + num_envs]
+            assign_eval_trials(command, batch_trials)
             obs, _ = env.reset()
             if env.num_actions != spec["num_actions"] or any(
                 obs[g].shape[-1] != spec["group_dims"][g] for g in TEACHER_GROUPS
@@ -163,7 +200,8 @@ def main():
             try:
                 if recorder is not None:
                     warmup_rgb(env.unwrapped)
-                    recorder.start(ids[0], names[ids[0]])
+                    trial = batch_trials[0]
+                    recorder.start(trial["clip_id"], trial["name"], trial["trial_id"] if num_trials > 1 else None)
                 with torch.no_grad():
                     policy(obs)  # warm up kernels before measuring inference
                     for _ in range(evaluator.max_steps):
@@ -182,7 +220,9 @@ def main():
                         if evaluator.done:
                             break
             finally:
-                batch_rows = evaluator.rows()[: len(ids)]
+                batch_rows = evaluator.rows()[: len(batch_trials)]
+                for row, trial in zip(batch_rows, batch_trials):
+                    row.update(trial)
                 if recorder is not None:
                     video_info = recorder.finish(complete=evaluator.done)
                     if video_info is not None:
@@ -190,7 +230,7 @@ def main():
                 rows.extend(batch_rows)
                 metric_keys = list(evaluator.sums) + ["contact_lost_bodies_per_step", "action_change_mse"]
                 save_report()
-            print(f"[Eval] {len(rows)}/{len(names)} clips; successful={sum(r['success'] for r in rows)}", flush=True)
+            print(f"[Eval] {len(rows)}/{len(trials)} trials; successful={sum(r['success'] for r in rows)}", flush=True)
             if not simulation_app.is_running():
                 break
     finally:

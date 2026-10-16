@@ -180,15 +180,62 @@ python scripts/dagger/eval.py \
 ```
 
 Both use deterministic evaluation, no domain randomization, no proprio noise,
-and identical clips/terminations. Student evaluation never uses teacher actions
+and identical clips/terminations by default. Student evaluation never uses teacher actions
 or updates parameters. Teacher baseline identity is checked against training;
 `--teacher_checkpoint` supports relocating that same file.
+
+To evaluate one clip repeatedly with sampled initial object poses:
+
+```bash
+python scripts/dagger/eval.py \
+  --checkpoint outputs/dagger_ppo_floorlamp_033_run1/model_100.pt \
+  --policy student \
+  --motion_files data/test/floorlamp_033_var5.npz \
+  --clip_ids 0 --num_trials 20 --perturbation initial_small --seed 42 \
+  --device cuda:0 --num_envs 4 --no_video \
+  --output_dir outputs/dagger_ppo_floorlamp_033_run1/100/eval_clip0_small
+```
+
+`--clip_ids` accepts zero-based ids across the supplied motion files; omit it to
+evaluate every clip. `--num_trials` defaults to 1. With `--no_video`, environments
+can run independent trials of the same clip in parallel. Omit `--no_video` to
+record every trial serially; repeated trials have `_trial_<id>` video suffixes.
+The same options can be set as `clip_ids`, `num_trials` and `perturbation` in YAML.
+
+The initial-pose profiles sample independent uniform offsets per trial:
+
+| `--perturbation` | World x and y, each | Yaw around world z |
+| --- | --- | --- |
+| `none` (default) | 0 | 0 |
+| `initial_small` | ±0.002 m | ±0.5 degrees |
+| `initial_medium` | ±0.005 m | ±1 degree |
+| `initial_large` | ±0.010 m | ±2 degrees |
+
+Only the object's actual initial pose changes, before observations and camera
+frames are read. Rotation is about the object's root position. Object height,
+world velocities, robot initial state and reference trajectories remain unchanged;
+each trial starts at reference frame zero. Proprio noise, physical-parameter
+randomization and pushes remain disabled. Check a few videos to choose ranges
+appropriate to the clip's initial grasp and support geometry.
+
+Each trial's sampling seed is derived from `(seed, clip_id, trial_id)`. Changing
+batch size, clip selection order or the number of trials preserves conditions
+for existing trial ids. Use the same seed/profile when comparing checkpoints or
+student and teacher. This reproduces sampled conditions, not necessarily bitwise
+identical GPU physics trajectories. `trials.json` saves the entire planned set
+of conditions before simulation starts, including metre/radian offsets and seeds.
 
 Reports go to `eval_student/metrics.json` and `eval_teacher/metrics.json`, or
 `--output_dir`. They include original command tracking metrics, per-clip
 success/progress/failure reasons, missed reference contact bodies per step,
 action-change MSE, and synchronized batch inference latency. Camera rendering
 and environment stepping are outside the reported policy inference latency.
+`num_clips` counts distinct clips and `num_trials` counts trial rows. `clips`
+contains one row per trial, including `trial_id`, `trial_seed`, `perturbation` and
+`object_pose_offset`. `clip_summary` groups results by clip with successes/trials,
+success rate, a 95% Wilson confidence interval, progress and failure counts.
+`all_requested_trials_evaluated` is true only when every requested trial finishes;
+an interrupted report is partial and must not be treated as the full trial set.
 
 Videos are saved as `eval_<policy>/videos/clip_<id>_<motion_name>.mp4`, with
 sanitized names and clip ids to distinguish duplicate motion names. The default
