@@ -1,9 +1,12 @@
 # Current student perception + PPO/BC from commit 3904770.
-# Fresh runs initialize actor/vector normalizers/critic from the teacher; CNN is new.
+# Goal MLPs and CNN are new; proprio, SimBa and critic initialize from the teacher.
 teacher:
   checkpoint: null
   agent_config: null
   env_config: null
+
+student:
+  observation_mode: terminal_goal   # Last frame of the selected clip, regardless of RSI start.
 
 training:
   seed: 42
@@ -33,7 +36,7 @@ training:
   keep_last_checkpoints: null   # Keep every numbered checkpoint.
   log_interval: 10
 
-# Keep the current environment/motions/rewards/observations and depth processing.
+# Teacher/Critic references, rewards, terminations and depth processing stay unchanged.
 env_overrides:
   commands:
     motion:

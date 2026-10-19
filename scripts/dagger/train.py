@@ -27,7 +27,7 @@ parser.add_argument("--teacher_checkpoint")
 parser.add_argument("--teacher_agent_config")
 parser.add_argument("--teacher_env_config")
 initialization = parser.add_mutually_exclusive_group()
-initialization.add_argument("--resume", help="v3 PPO+BC checkpoint; resume optimizer, BC schedule, counters and RNG")
+initialization.add_argument("--resume", help="v4 PPO+BC checkpoint; resume optimizer, BC schedule, counters and RNG")
 initialization.add_argument(
     "--student_checkpoint", help="Optional student weights; default initialization is from the teacher"
 )
@@ -70,6 +70,8 @@ from g1_hoi_learning.algorithms.dagger.networks import (
     StudentWeaveActor,
     TeacherWeaveActor,
     actor_spec,
+    student_actor_spec,
+    student_groups,
 )
 from g1_hoi_learning.algorithms.dagger.runner import SCHEMA, DaggerRunner, file_sha256
 from g1_hoi_learning.algorithms.distillation.networks import SimBaActorCriticTeacher, critic_spec
@@ -94,11 +96,11 @@ def main(context):
         if resume_state.get("kind", "training") != "training":
             raise ValueError("--resume requires a full model_<iteration>.pt checkpoint, not student weights")
         if resume_state.get("schema") != SCHEMA:
-            raise ValueError("Legacy training cannot resume this schedule; use --student_checkpoint to warm start")
+            raise ValueError("Legacy training cannot resume the goal contract; start a fresh run from the teacher")
         if resume_state.get("world_size", 1) != context.world_size:
             raise ValueError("Resume requires the same world size; use --student_checkpoint for a new run")
         # The runner loads weights/optimizer later; retain only initialization metadata here.
-        resume_state = {key: resume_state[key] for key in ("train_cfg", "teacher_info", "resolved_env")}
+        resume_state = {key: resume_state[key] for key in ("train_cfg", "teacher_info", "resolved_env", "actor_spec")}
     # Resuming uses the saved schedule and teacher configs, not today's YAML defaults.
     settings = resume_state["train_cfg"] if resume_state else config.get("training", {})
     settings = dict(settings)
@@ -142,7 +144,21 @@ def main(context):
     random.seed(rank_seed)
     np.random.seed(rank_seed)
     torch.manual_seed(rank_seed)
-    env_cfg = context.all_call(lambda: make_env_cfg(saved_env, cfg.num_envs, rank_seed, device, overrides))
+    observation_mode = (
+        resume_state["actor_spec"].get("observation_mode", "reference")
+        if resume_state
+        else config.get("student", {}).get("observation_mode", "terminal_goal")
+    )
+    env_cfg = context.all_call(
+        lambda: make_env_cfg(
+            saved_env,
+            cfg.num_envs,
+            rank_seed,
+            device,
+            overrides,
+            student_observation_mode=observation_mode,
+        )
+    )
 
     def prepare_output():
         root = Path(
@@ -172,10 +188,21 @@ def main(context):
                     raise ValueError(f"Expected flat teacher group: {group}")
             return actor_spec(agent_config, {g: obs[g].shape[-1] for g in TEACHER_GROUPS}, env.num_actions)
 
-        spec = context.all_call(validate_actor_spec)
+        teacher_spec = context.all_call(validate_actor_spec)
+
+        def make_student_spec():
+            if observation_mode == "reference":
+                return teacher_spec
+            groups = student_groups({"observation_mode": observation_mode})
+            for group in groups:
+                if group != "head_depth" and obs[group].ndim != 2:
+                    raise ValueError(f"Expected flat student group: {group}")
+            return student_actor_spec(teacher_spec, {g: obs[g].shape[-1] for g in groups if g != "head_depth"})
+
+        spec = context.all_call(make_student_spec)
         teacher_state = context.all_call(lambda: torch.load(checkpoint, map_location="cpu", weights_only=False))
         teacher = context.all_call(
-            lambda state=teacher_state: TeacherWeaveActor(spec, state["model_state_dict"]).to(device)
+            lambda state=teacher_state: TeacherWeaveActor(teacher_spec, state["model_state_dict"]).to(device)
         )
         # Identical initialization, then independent environment/minibatch random streams.
         torch.manual_seed(cfg.seed)
@@ -216,6 +243,7 @@ def main(context):
                     {
                         "training": asdict(cfg),
                         "teacher": teacher_info,
+                        "teacher_actor_spec": teacher_spec,
                         "student": spec,
                         "critic": policy.critic_spec,
                         "algorithm_source_commit": "3904770889ee67b34113df01f3f5533add0a468b",
@@ -234,6 +262,7 @@ def main(context):
             samples = cfg.num_envs * cfg.rollout_steps
             print(
                 f"[DAgger] Teacher: {checkpoint}\n[DAgger] Output: {run_dir}\n"
+                f"[DAgger] Student inputs: {student.observation_groups}; vectors={spec['group_dims']}\n"
                 f"[DAgger] world_size={context.world_size}, envs_per_rank={cfg.num_envs}, "
                 f"global_envs={cfg.num_envs * context.world_size}; "
                 f"{samples} samples/rank/rollout, global_samples={samples * context.world_size}; "

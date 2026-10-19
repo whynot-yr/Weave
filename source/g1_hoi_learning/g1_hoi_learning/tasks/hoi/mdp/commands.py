@@ -13,7 +13,7 @@ Memory layout::
     clip_object:  (M,)    object index each clip manipulates
 
 Each env owns a fixed object (``env_object``) and plays one clip of that object at a time
-(``env_clip``, re-sampled every episode). 
+(``env_clip``, re-sampled every episode).
 Frame access is via ``buffer[clip_starts[env_clip] + time_steps]``.
 """
 
@@ -30,19 +30,16 @@ from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils import configclass
-from isaaclab.utils.math import (
-    quat_error_magnitude,
-)
+from isaaclab.utils.math import quat_error_magnitude
 
 from g1_hoi_learning.algorithms.perturbations import offset_object_pose
 from g1_hoi_learning.objects import ASSET_DIR
-
 
 # ----------------------------------------------------------------------- TensorClass
 
 class MotionData(TensorClass):
     """
-    Per-frame motion state. 
+    Per-frame motion state.
     """
 
     motion_id:        torch.Tensor   # (..., ) long  — which motion this frame belongs to
@@ -248,9 +245,30 @@ class MotionCommand(CommandTerm):
         self.metrics["error_object_rot"] = torch.zeros(self.num_envs, device=self.device)
 
         # initial frame so properties are valid before the first _update_command
+        self._refresh_goal()
         self._refresh_caches()
 
     # ------------------------------------------------------------------- caches
+
+    def _refresh_goal(self, env_ids: Sequence[int] | None = None) -> None:
+        """Lock each selected clip's terminal pose, independently of its RSI start frame."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        clips = self.env_clip[env_ids]
+        indices = self.motion.clip_starts[clips] + self.motion.clip_lengths[clips] - 1
+        buffer = self.motion.buffer
+        values = {
+            "_goal_joint_pos": buffer.joint_pos[indices],
+            "_goal_anchor_pos": buffer.body_pos_w[indices, self.anchor_index],
+            "_goal_anchor_quat": buffer.body_quat_w[indices, self.anchor_index],
+            "_goal_obj_pos": buffer.object_pos_w[indices],
+            "_goal_obj_quat": buffer.object_quat_w[indices],
+        }
+        for name, value in values.items():
+            if not hasattr(self, name):
+                cache = torch.empty((self.num_envs, *value.shape[1:]), device=value.device, dtype=value.dtype)
+                setattr(self, name, cache)
+            getattr(self, name)[env_ids] = value
 
     def _refresh_caches(self) -> None:
         self._current_frame = self.motion.frames(self.env_clip, self.time_steps)
@@ -272,6 +290,28 @@ class MotionCommand(CommandTerm):
     @property
     def command(self) -> torch.Tensor:
         return torch.cat([self.joint_pos, self.joint_vel], dim=1)
+
+    # ------------------------------------------------------------------- fixed terminal goals
+
+    @property
+    def goal_joint_pos(self) -> torch.Tensor:
+        return self._goal_joint_pos
+
+    @property
+    def goal_anchor_pos_w(self) -> torch.Tensor:
+        return self._goal_anchor_pos + self._env.scene.env_origins
+
+    @property
+    def goal_anchor_quat_w(self) -> torch.Tensor:
+        return self._goal_anchor_quat
+
+    @property
+    def goal_obj_pos_w(self) -> torch.Tensor:
+        return self._goal_obj_pos + self._env.scene.env_origins
+
+    @property
+    def goal_obj_quat_w(self) -> torch.Tensor:
+        return self._goal_obj_quat
 
     # ------------------------------------------------------------------- motion-data properties (current frame)
 
@@ -452,7 +492,7 @@ class MotionCommand(CommandTerm):
             return
         objects = self.env_object[env_ids]
 
-        # 1. pick which clip each reset env plays (within its fixed object); always start at frame 0
+        # 1. pick a clip and starting frame within the environment's fixed object
         if self.cfg.eval_mode:
             self.env_clip[env_ids] = self._eval_env_clip[env_ids]
             self.time_steps[env_ids] = 0
@@ -464,6 +504,9 @@ class MotionCommand(CommandTerm):
         else:
             self.env_clip[env_ids] = self.motion.first_clip(objects)
             self.time_steps[env_ids] = 0
+
+        # Also runs on training clip rollover, which does not call CommandTerm.reset().
+        self._refresh_goal(env_ids)
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
         new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])

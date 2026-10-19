@@ -11,7 +11,7 @@ import g1_hoi_learning
 from g1_hoi_learning.algorithms.dagger.io import read_yaml  # noqa: F401
 from g1_hoi_learning.algorithms.vision import DEPTH_FAR, DEPTH_NEAR, DEPTH_SIZE
 from g1_hoi_learning.tasks.hoi.mdp.terminations import motion_clip_end
-from g1_hoi_learning.tasks.hoi.student_env_cfg import G1StudentWeaveEnvCfg
+from g1_hoi_learning.tasks.hoi.student_env_cfg import G1StudentWeaveEnvCfg, GoalObjectPoseCfg, GoalRobotPoseCfg
 
 from isaaclab.managers import TerminationTermCfg
 
@@ -73,7 +73,15 @@ def teacher_config_paths(checkpoint: str, agent_path: str | None, env_path: str 
     return str(agent.resolve()), str(env.resolve())
 
 
-def make_env_cfg(saved: dict, num_envs: int, seed: int, device: str, overrides: dict | None = None, evaluation=False):
+def make_env_cfg(
+    saved: dict,
+    num_envs: int,
+    seed: int,
+    device: str,
+    overrides: dict | None = None,
+    evaluation=False,
+    student_observation_mode="terminal_goal",
+):
     cfg = G1StudentWeaveEnvCfg()
     source = copy.deepcopy(saved.get("env", saved))
     source.get("scene", {}).pop("object", None)  # rebuilt from motion_files by the environment factory
@@ -100,6 +108,15 @@ def make_env_cfg(saved: dict, num_envs: int, seed: int, device: str, overrides: 
             if name != "robot_proprio" or set(value) - {"enable_corruption"}:
                 raise ValueError("Only proprio enable_corruption may be overridden")
         cfg.from_dict(overrides)
+    # Apply after merging the teacher snapshot: only the student's extra inputs change.
+    if student_observation_mode == "terminal_goal":
+        cfg.observations.goal_robot_pose = GoalRobotPoseCfg()
+        cfg.observations.goal_object_pose = GoalObjectPoseCfg()
+    elif student_observation_mode == "reference":
+        cfg.observations.goal_robot_pose = None
+        cfg.observations.goal_object_pose = None
+    else:
+        raise ValueError(f"Unknown student observation mode: {student_observation_mode}")
     cfg.seed, cfg.sim.device, cfg.scene.num_envs = seed, device, num_envs
     cfg.scene.head_camera.height = cfg.scene.head_camera.width = DEPTH_SIZE
     cfg.scene.head_camera.data_types = ["depth"]

@@ -15,6 +15,7 @@ import torch.multiprocessing as mp
 from conftest import make_policy
 from g1_hoi_learning.algorithms.dagger.config import DaggerTrainConfig
 from g1_hoi_learning.algorithms.dagger.distributed import DistributedContext
+from g1_hoi_learning.algorithms.dagger.networks import GOAL_VECTOR_GROUPS, StudentWeaveActor, student_actor_spec
 from g1_hoi_learning.algorithms.dagger.runner import DaggerRunner
 from g1_hoi_learning.algorithms.distillation.algorithm import MuonPPODistill
 from test_ppo import FakeEnv
@@ -27,20 +28,28 @@ def _context(rank, rendezvous):
     return DistributedContext(rank, rank, 2, torch.device("cpu"))
 
 
-def _obs(spec, count, seed):
+def _obs(spec, count, seed, goal_conditioned=False):
     generator = torch.Generator().manual_seed(seed)
     obs = {key: torch.randn(count, width, generator=generator) for key, width in spec["group_dims"].items()}
     obs["robot_privileged"] = torch.randn(count, 8, generator=generator)
     depth = torch.rand(count, 1, 128, 128, generator=generator)
     obs["head_depth"] = (depth * 10000).round() / 10000
+    if goal_conditioned:
+        obs["goal_robot_pose"] = torch.randn(count, 62, generator=generator)
+        obs["goal_object_pose"] = torch.randn(count, 9, generator=generator)
     return obs
 
 
-def _gradient_worker(rank, rendezvous, spec, teacher):
+def _gradient_worker(rank, rendezvous, spec, teacher, goal_conditioned):
     context = _context(rank, rendezvous)
     try:
         torch.manual_seed(71)
-        policy = make_policy(spec, teacher)
+        student = None
+        if goal_conditioned:
+            dims = dict(zip(GOAL_VECTOR_GROUPS, [62, 9, spec["group_dims"]["robot_proprio"]]))
+            student = StudentWeaveActor(student_actor_spec(spec, dims))
+            student.initialize_from_teacher(teacher)
+        policy = make_policy(spec, teacher, student)
         baseline = copy.deepcopy(policy)
         cfg = DaggerTrainConfig(
             num_envs=7,
@@ -57,7 +66,7 @@ def _gradient_worker(rank, rendezvous, spec, teacher):
         baseline_optimizer = torch.optim.SGD(
             [p for p in baseline.parameters() if p.requires_grad], lr=cfg.learning_rate
         )
-        all_obs = _obs(spec, 14, 731)
+        all_obs = _obs(spec, 14, 731, goal_conditioned)
         obs = {key: value[rank * 7 : (rank + 1) * 7] for key, value in all_obs.items()}
         algorithm.init_storage("rl", 7, 1, obs)
         with torch.no_grad():
@@ -143,8 +152,14 @@ def _gradient_worker(rank, rendezvous, spec, teacher):
         context.close()
 
 
-def test_ddp_accumulated_ppo_gradients_match_global_batch(spec, teacher, tmp_path):
-    mp.spawn(_gradient_worker, args=((tmp_path / "gradient.rendezvous").as_uri(), spec, teacher), nprocs=2, join=True)
+@pytest.mark.parametrize("goal_conditioned", [False, True])
+def test_ddp_accumulated_ppo_gradients_match_global_batch(spec, teacher, tmp_path, goal_conditioned):
+    mp.spawn(
+        _gradient_worker,
+        args=((tmp_path / "gradient.rendezvous").as_uri(), spec, teacher, goal_conditioned),
+        nprocs=2,
+        join=True,
+    )
 
 
 def _runner_worker(rank, rendezvous, spec, teacher, directory, mode):

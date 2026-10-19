@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from g1_hoi_learning.algorithms.dagger.config import DaggerTrainConfig
 from g1_hoi_learning.algorithms.dagger.distributed import DistributedContext
-from g1_hoi_learning.algorithms.dagger.networks import STUDENT_GROUPS, TEACHER_GROUPS
+from g1_hoi_learning.algorithms.dagger.networks import TEACHER_GROUPS
 from g1_hoi_learning.algorithms.ppo.algorithm import MuonPPO
 
 from .storage import DepthRolloutStorage
@@ -62,7 +62,15 @@ class MuonPPODistill(MuonPPO):
     def init_storage(self, training_type, num_envs, num_transitions_per_env, obs, actions_shape=None):
         if training_type != "rl":
             raise ValueError("PPO+BC uses RL storage, not RSL-RL's separate distillation runner")
-        groups = tuple(dict.fromkeys((*STUDENT_GROUPS, *TEACHER_GROUPS, *self.policy.critic_spec["groups"])))
+        groups = tuple(
+            dict.fromkeys(
+                (
+                    *self.policy.actor.observation_groups,
+                    *TEACHER_GROUPS,
+                    *self.policy.critic_spec["groups"],
+                )
+            )
+        )
         self.storage = DepthRolloutStorage(num_envs, num_transitions_per_env, {g: obs[g] for g in groups}, self.context)
 
     def act(self, obs, metadata=None):

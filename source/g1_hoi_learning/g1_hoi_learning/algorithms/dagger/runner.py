@@ -21,8 +21,8 @@ from .config import DaggerTrainConfig
 from .distributed import DistributedContext
 from .networks import StudentWeaveActor, TeacherWeaveActor, export_student
 
-SCHEMA = "weave-depth-dagger-v3"
-STUDENT_SCHEMAS = {SCHEMA, "weave-depth-dagger-v2", "weave-depth-dagger-v1"}
+SCHEMA = "weave-depth-dagger-v4"
+STUDENT_SCHEMAS = {SCHEMA, "weave-depth-dagger-v3", "weave-depth-dagger-v2", "weave-depth-dagger-v1"}
 
 
 def file_sha256(path: str) -> str:
@@ -208,6 +208,7 @@ class DaggerRunner:
         return {
             "schema": SCHEMA,
             "actor_spec": self.student.spec,
+            "teacher_actor_spec": self.teacher.spec,
             "student_state_dict": self.student.state_dict(),
             "next_iteration": self.iteration,
             "teacher_info": self.teacher_info,
@@ -235,6 +236,8 @@ class DaggerRunner:
         state = torch.load(path, map_location="cpu", weights_only=False)
         if state.get("schema") not in STUDENT_SCHEMAS or state.get("actor_spec") != self.student.spec:
             raise ValueError("Incompatible student weights; use a DAgger checkpoint, not a TorchScript export")
+        if state.get("teacher_actor_spec", state["actor_spec"]) != self.teacher.spec:
+            raise ValueError("Student weights use a different teacher observation contract")
         if state["teacher_info"]["sha256"] != self.teacher_info["sha256"]:
             raise ValueError("Student weights use a different teacher checkpoint")
         self.student.load_state_dict(state["student_state_dict"], strict=True)
@@ -305,12 +308,14 @@ class DaggerRunner:
             raise ValueError("Resume requires a full model_<iteration>.pt checkpoint, not student weights")
         if state.get("schema") != SCHEMA:
             raise ValueError(
-                "Legacy DAgger training cannot resume this schedule; use --student_checkpoint to warm start"
+                "Legacy DAgger training cannot resume the goal contract; start a fresh run from the teacher"
             )
         if state.get("world_size", 1) != self.context.world_size:
             raise ValueError("Resume requires the same world size; use --student_checkpoint to start a new run")
         if state["actor_spec"] != self.student.spec or state["critic_spec"] != self.policy.critic_spec:
             raise ValueError("Incompatible DAgger actor or critic")
+        if state["teacher_actor_spec"] != self.teacher.spec:
+            raise ValueError("Incompatible DAgger teacher observation contract")
         saved_cfg = asdict(DaggerTrainConfig(**state["train_cfg"]))
         current_cfg = asdict(self.cfg)
         # Memory/save controls may change; effective batches and the schedule may not.

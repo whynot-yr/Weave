@@ -90,7 +90,7 @@ class SimBaActorCriticTeacher(ActorCritic):
         return obs
 
     def update_normalization(self, obs):
-        """All normalizers are teacher-initialized and fixed by design."""
+        """Teacher-derived statistics stay fixed; goal inputs use identity normalization."""
 
     def train(self, mode: bool = True):
         super().train(mode)

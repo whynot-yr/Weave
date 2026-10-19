@@ -19,6 +19,32 @@ from .commands import MotionCommand
 from .geometry import SampledSurfaceQuery, load_bps_sdf_assets, sample_sdf_trilinear
 
 
+def goal_robot_pose(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Terminal joint angles, anchor position and rot6d in the current actual anchor frame."""
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    pos, quat = subtract_frame_transforms(
+        command.robot_anchor_pos_w,
+        command.robot_anchor_quat_w,
+        command.goal_anchor_pos_w,
+        command.goal_anchor_quat_w,
+    )
+    rot6d = matrix_from_quat(quat)[..., :2].reshape(env.num_envs, 6)
+    return torch.cat((command.goal_joint_pos, pos, rot6d), dim=-1)
+
+
+def goal_object_pose(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
+    """Terminal object position and rot6d in the current actual robot anchor frame."""
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    pos, quat = subtract_frame_transforms(
+        command.robot_anchor_pos_w,
+        command.robot_anchor_quat_w,
+        command.goal_obj_pos_w,
+        command.goal_obj_quat_w,
+    )
+    rot6d = matrix_from_quat(quat)[..., :2].reshape(env.num_envs, 6)
+    return torch.cat((pos, rot6d), dim=-1)
+
+
 def motion_joint_pos(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     """Reference joint positions from motion data."""
     command: MotionCommand = env.command_manager.get_term(command_name)
@@ -143,6 +169,7 @@ def robot_body_ori_b(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
     mat = matrix_from_quat(ori_b)
     return mat[..., :2].reshape(env.num_envs, -1)
 
+
 # -- Object observations --
 
 
@@ -232,7 +259,7 @@ class object_nearest_point_b(ManagerTermBase):
     def __call__(self, env: ManagerBasedEnv, command_name: str, body_names: list[str]) -> torch.Tensor:
         del command_name, body_names
         command = self.command
-        body_pos_w = command.robot_body_pos_w[:, self.body_ids]                # (num_envs, B, 3)
+        body_pos_w = command.robot_body_pos_w[:, self.body_ids]  # (num_envs, B, 3)
         num_bodies = body_pos_w.shape[1]
 
         body_pos_o = quat_apply_inverse(

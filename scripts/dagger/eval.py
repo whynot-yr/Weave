@@ -16,7 +16,7 @@ parser.add_argument("--config", default="configs/dagger/eval.yaml")
 parser.add_argument(
     "--checkpoint",
     required=True,
-    help="v1/v2/v3 DAgger checkpoint or lightweight student weights (mean-action evaluation)",
+    help="v1/v2/v3/v4 DAgger checkpoint or lightweight student weights (mean-action evaluation)",
 )
 parser.add_argument("--policy", choices=("student", "teacher"), default="student")
 parser.add_argument("--teacher_checkpoint", help="Relocated teacher baseline checkpoint")
@@ -51,7 +51,7 @@ from g1_hoi_learning.algorithms.dagger.evaluation import (
     build_eval_trials,
     summarize,
 )
-from g1_hoi_learning.algorithms.dagger.networks import TEACHER_GROUPS, StudentWeaveActor, TeacherWeaveActor
+from g1_hoi_learning.algorithms.dagger.networks import StudentWeaveActor, TeacherWeaveActor, student_groups
 from g1_hoi_learning.algorithms.dagger.runner import STUDENT_SCHEMAS, file_sha256
 from g1_hoi_learning.algorithms.dagger.video import ClipVideoRecorder, VideoConfig
 from g1_hoi_learning.tasks.hoi.mdp.commands import MotionLoader
@@ -65,6 +65,7 @@ def main():
     state.pop("replay", None)
     if state.get("schema") not in STUDENT_SCHEMAS:
         raise ValueError("Expected a depth DAgger checkpoint")
+    teacher_spec = state.get("teacher_actor_spec", state["actor_spec"])
     batch_size = args.num_envs if args.num_envs is not None else config.get("num_envs", 32)
     if batch_size < 1:
         raise ValueError("num_envs must be positive")
@@ -100,7 +101,7 @@ def main():
         if file_sha256(checkpoint) != state["teacher_info"]["sha256"]:
             raise ValueError("Teacher baseline differs from the training teacher")
         teacher_state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        policy = TeacherWeaveActor(state["actor_spec"], teacher_state["model_state_dict"])
+        policy = TeacherWeaveActor(teacher_spec, teacher_state["model_state_dict"])
         del teacher_state
     policy.to(device).eval()
     saved_env = state["resolved_env"]
@@ -119,6 +120,7 @@ def main():
         device,
         {"commands": {"motion": {"motion_files": motion_files}}},
         evaluation=True,
+        student_observation_mode=spec.get("observation_mode", "reference"),
     )
     initial_ids = [trial["clip_id"] for trial in trials[:num_envs]]
     env_cfg.commands.motion.eval_clip_ids = initial_ids
@@ -138,6 +140,7 @@ def main():
     report_metadata = {
         "checkpoint": str(Path(args.checkpoint).resolve()),
         "policy": args.policy,
+        "student_observation_mode": spec.get("observation_mode", "reference"),
         "motion_files": motion_files,
         "seed": seed,
         "selected_clip_ids": selected_clip_ids,
@@ -192,8 +195,10 @@ def main():
             batch_trials = trials[first : first + num_envs]
             assign_eval_trials(command, batch_trials)
             obs, _ = env.reset()
-            if env.num_actions != spec["num_actions"] or any(
-                obs[g].shape[-1] != spec["group_dims"][g] for g in TEACHER_GROUPS
+            if (
+                env.num_actions != spec["num_actions"]
+                or any(obs[g].shape[-1] != width for g, width in teacher_spec["group_dims"].items())
+                or any(obs[g].shape[-1] != spec["group_dims"][g] for g in student_groups(spec) if g != "head_depth")
             ):
                 raise ValueError("Evaluation observation/action dimensions differ from training")
             evaluator = ClipEvaluator(env, names)
