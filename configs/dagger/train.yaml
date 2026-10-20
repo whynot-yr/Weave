@@ -1,5 +1,5 @@
-# Current student perception + PPO/BC from commit 3904770.
-# Goal MLPs and CNN are new; proprio, SimBa and critic initialize from the teacher.
+# Goal/object-state student + PPO/BC from commit 3904770.
+# Goal MLPs are new; object_state, proprio, SimBa and critic initialize from the teacher.
 teacher:
   checkpoint: null
   agent_config: null
@@ -7,6 +7,7 @@ teacher:
 
 student:
   observation_mode: terminal_goal   # Last frame of the selected clip, regardless of RSI start.
+  perception_mode: object_state     # The same live observation group as Teacher; no policy camera.
 
 training:
   seed: 42
@@ -36,7 +37,7 @@ training:
   keep_last_checkpoints: null   # Keep every numbered checkpoint.
   log_interval: 10
 
-# Teacher/Critic references, rewards, terminations and depth processing stay unchanged.
+# Teacher/Critic references, rewards and terminations stay unchanged.
 env_overrides:
   commands:
     motion:

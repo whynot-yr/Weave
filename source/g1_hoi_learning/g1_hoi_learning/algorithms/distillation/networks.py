@@ -1,6 +1,6 @@
-"""3904770 actor/critic/teacher contract adapted to the existing depth student.
+"""3904770 actor/critic/teacher contract adapted to the goal/object-state student.
 
-The student's inputs, CNN, normalization and tracker initialization stay in
+The student's inputs, vector encoders, normalization and tracker initialization stay in
 dagger.networks. RSL-RL supplies the Gaussian distribution and critic interfaces.
 """
 
@@ -86,7 +86,7 @@ class SimBaActorCriticTeacher(ActorCritic):
         self.train()
 
     def get_actor_obs(self, obs):
-        # Keep NCHW depth separate; never concatenate or normalize it a second time.
+        # Each student group is normalized and encoded inside StudentWeaveActor.
         return obs
 
     def update_normalization(self, obs):

@@ -1,4 +1,4 @@
-"""3904770 Muon PPO+BC, adapted for CPU depth storage, microbatches and DDP.
+"""3904770 Muon PPO+BC, adapted for CPU vector storage, microbatches and DDP.
 
 The PPO/value/BC objectives, KL learning-rate rule and cosine BC schedule come
 from 3904770889ee67b34113df01f3f5533add0a468b. RSL-RL still owns action recording,
@@ -19,7 +19,7 @@ from g1_hoi_learning.algorithms.dagger.distributed import DistributedContext
 from g1_hoi_learning.algorithms.dagger.networks import TEACHER_GROUPS
 from g1_hoi_learning.algorithms.ppo.algorithm import MuonPPO
 
-from .storage import DepthRolloutStorage
+from .storage import VectorRolloutStorage
 
 
 class MuonPPODistill(MuonPPO):
@@ -71,7 +71,9 @@ class MuonPPODistill(MuonPPO):
                 )
             )
         )
-        self.storage = DepthRolloutStorage(num_envs, num_transitions_per_env, {g: obs[g] for g in groups}, self.context)
+        self.storage = VectorRolloutStorage(
+            num_envs, num_transitions_per_env, {g: obs[g] for g in groups}, self.context
+        )
 
     def act(self, obs, metadata=None):
         action = super().act(obs)

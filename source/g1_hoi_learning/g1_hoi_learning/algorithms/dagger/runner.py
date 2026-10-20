@@ -21,8 +21,8 @@ from .config import DaggerTrainConfig
 from .distributed import DistributedContext
 from .networks import StudentWeaveActor, TeacherWeaveActor, export_student
 
-SCHEMA = "weave-depth-dagger-v4"
-STUDENT_SCHEMAS = {SCHEMA, "weave-depth-dagger-v3", "weave-depth-dagger-v2", "weave-depth-dagger-v1"}
+SCHEMA = "weave-goal-state-dagger-v5"
+STUDENT_SCHEMAS = {SCHEMA}
 
 
 def file_sha256(path: str) -> str:
@@ -308,7 +308,7 @@ class DaggerRunner:
             raise ValueError("Resume requires a full model_<iteration>.pt checkpoint, not student weights")
         if state.get("schema") != SCHEMA:
             raise ValueError(
-                "Legacy DAgger training cannot resume the goal contract; start a fresh run from the teacher"
+                "Legacy DAgger training cannot resume the goal/object-state contract; start fresh from the teacher"
             )
         if state.get("world_size", 1) != self.context.world_size:
             raise ValueError("Resume requires the same world size; use --student_checkpoint to start a new run")

@@ -1,4 +1,4 @@
-"""Train current depth Student-Weave with the historical 3904770 PPO+BC algorithm."""
+"""Train terminal-goal/object-state Student-Weave with the historical 3904770 PPO+BC algorithm."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ parser.add_argument("--teacher_checkpoint")
 parser.add_argument("--teacher_agent_config")
 parser.add_argument("--teacher_env_config")
 initialization = parser.add_mutually_exclusive_group()
-initialization.add_argument("--resume", help="v4 PPO+BC checkpoint; resume optimizer, BC schedule, counters and RNG")
+initialization.add_argument("--resume", help="v5 PPO+BC checkpoint; resume optimizer, BC schedule, counters and RNG")
 initialization.add_argument(
     "--student_checkpoint", help="Optional student weights; default initialization is from the teacher"
 )
@@ -54,7 +54,7 @@ if args.distributed:
         parser.error("Distributed IsaacLab simulation requires CUDA")
     # AppLauncher binds both physics and camera rendering before SimulationApp starts.
     args.device = f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}"
-args.enable_cameras = True
+args.enable_cameras = False
 app = AppLauncher(args)
 simulation_app = app.app
 
@@ -96,7 +96,9 @@ def main(context):
         if resume_state.get("kind", "training") != "training":
             raise ValueError("--resume requires a full model_<iteration>.pt checkpoint, not student weights")
         if resume_state.get("schema") != SCHEMA:
-            raise ValueError("Legacy training cannot resume the goal contract; start a fresh run from the teacher")
+            raise ValueError(
+                "Legacy training cannot resume the goal/object-state contract; start fresh from the teacher"
+            )
         if resume_state.get("world_size", 1) != context.world_size:
             raise ValueError("Resume requires the same world size; use --student_checkpoint for a new run")
         # The runner loads weights/optimizer later; retain only initialization metadata here.
@@ -145,10 +147,16 @@ def main(context):
     np.random.seed(rank_seed)
     torch.manual_seed(rank_seed)
     observation_mode = (
-        resume_state["actor_spec"].get("observation_mode", "reference")
+        resume_state["actor_spec"]["observation_mode"]
         if resume_state
         else config.get("student", {}).get("observation_mode", "terminal_goal")
     )
+    perception_mode = (
+        resume_state["actor_spec"]["perception_mode"]
+        if resume_state
+        else config.get("student", {}).get("perception_mode", "object_state")
+    )
+    groups = student_groups({"observation_mode": observation_mode, "perception_mode": perception_mode})
     env_cfg = context.all_call(
         lambda: make_env_cfg(
             saved_env,
@@ -191,13 +199,10 @@ def main(context):
         teacher_spec = context.all_call(validate_actor_spec)
 
         def make_student_spec():
-            if observation_mode == "reference":
-                return teacher_spec
-            groups = student_groups({"observation_mode": observation_mode})
             for group in groups:
-                if group != "head_depth" and obs[group].ndim != 2:
+                if obs[group].ndim != 2:
                     raise ValueError(f"Expected flat student group: {group}")
-            return student_actor_spec(teacher_spec, {g: obs[g].shape[-1] for g in groups if g != "head_depth"})
+            return student_actor_spec(teacher_spec, {g: obs[g].shape[-1] for g in groups})
 
         spec = context.all_call(make_student_spec)
         teacher_state = context.all_call(lambda: torch.load(checkpoint, map_location="cpu", weights_only=False))

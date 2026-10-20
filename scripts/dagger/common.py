@@ -9,7 +9,6 @@ from pathlib import Path
 
 import g1_hoi_learning
 from g1_hoi_learning.algorithms.dagger.io import read_yaml  # noqa: F401
-from g1_hoi_learning.algorithms.vision import DEPTH_FAR, DEPTH_NEAR, DEPTH_SIZE
 from g1_hoi_learning.tasks.hoi.mdp.terminations import motion_clip_end
 from g1_hoi_learning.tasks.hoi.student_env_cfg import G1StudentWeaveEnvCfg, GoalObjectPoseCfg, GoalRobotPoseCfg
 
@@ -85,6 +84,7 @@ def make_env_cfg(
     cfg = G1StudentWeaveEnvCfg()
     source = copy.deepcopy(saved.get("env", saved))
     source.get("scene", {}).pop("object", None)  # rebuilt from motion_files by the environment factory
+    source.get("scene", {}).pop("head_camera", None)  # student reads live object_state, not images
     source.pop("log_dir", None)
     source.pop("seed", None)  # Base IsaacLab cfg seed is None; CLI/run seed is assigned below.
     relocate_package_assets(source)
@@ -112,17 +112,11 @@ def make_env_cfg(
     if student_observation_mode == "terminal_goal":
         cfg.observations.goal_robot_pose = GoalRobotPoseCfg()
         cfg.observations.goal_object_pose = GoalObjectPoseCfg()
-    elif student_observation_mode == "reference":
-        cfg.observations.goal_robot_pose = None
-        cfg.observations.goal_object_pose = None
     else:
         raise ValueError(f"Unknown student observation mode: {student_observation_mode}")
     cfg.seed, cfg.sim.device, cfg.scene.num_envs = seed, device, num_envs
-    cfg.scene.head_camera.height = cfg.scene.head_camera.width = DEPTH_SIZE
-    cfg.scene.head_camera.data_types = ["depth"]
-    cfg.scene.head_camera.update_period = 0.0
-    cfg.scene.head_camera.spawn.clipping_range = (DEPTH_NEAR, DEPTH_FAR)
-    cfg.num_rerenders_on_reset = 1
+    cfg.scene.head_camera = None
+    cfg.num_rerenders_on_reset = 0
     cfg.sim.render_interval = cfg.decimation
     cfg.commands.motion.eval_mode = evaluation
     cfg.commands.motion.eval_clip_ids = []
@@ -159,7 +153,6 @@ def environment_contract(env) -> dict:
         "events": cfg["events"],
         "rewards": cfg["rewards"],
         "terminations": cfg["terminations"],
-        "camera": cfg["scene"]["head_camera"],
         "dt": cfg["sim"]["dt"],
         "decimation": cfg["decimation"],
     }

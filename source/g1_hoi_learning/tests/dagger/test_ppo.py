@@ -44,8 +44,7 @@ def collect(algorithm, observations):
         for step in range(cfg.rollout_steps):
             algorithm.act(obs)
             for key in obs:
-                if key != "head_depth":
-                    obs[key].add_(0.01)
+                obs[key].add_(0.01)
             dones = torch.zeros(cfg.num_envs, dtype=torch.long)
             if step == 1:
                 dones[0] = 1
@@ -59,7 +58,7 @@ class FakeEnv:
 
     def __init__(self, observations):
         self.obs = observations
-        self.num_envs = len(observations["head_depth"])
+        self.num_envs = len(observations["robot_proprio"])
         self.actions = []
         command = SimpleNamespace(
             env_clip=torch.arange(self.num_envs), time_steps=torch.zeros(self.num_envs, dtype=torch.long)
@@ -68,9 +67,8 @@ class FakeEnv:
 
     def step(self, actions):
         self.actions.append(actions.clone())
-        for key, value in self.obs.items():
-            if key != "head_depth":
-                value.add_(0.01)
+        for value in self.obs.values():
+            value.add_(0.01)
         self.unwrapped.command_manager.get_term("motion").time_steps += 1
         dones = torch.zeros(self.num_envs, dtype=torch.long)
         timeouts = torch.zeros(self.num_envs, dtype=torch.bool)
@@ -95,14 +93,16 @@ def make_runner(spec, teacher, obs, directory, cfg=None):
     )
 
 
-def test_current_mean_actor_is_unchanged_and_only_critic_has_privileged_inputs(spec, teacher, observations):
+def test_actor_reads_live_object_state_and_only_critic_has_privileged_inputs(spec, teacher, observations):
     policy = make_policy(spec, teacher)
     expected = policy.actor(observations).detach()
     torch.testing.assert_close(policy.act_inference(observations), expected, rtol=0, atol=0)
-    changed = {**observations, "object_state": observations["object_state"] + 100}
+    changed = {**observations, "robot_privileged": observations["robot_privileged"] + 100}
     torch.testing.assert_close(policy.act_inference(changed), expected, rtol=0, atol=0)
     assert not torch.equal(policy.evaluate(changed), policy.evaluate(observations))
-    assert len([m for m in policy.actor.depth_encoder.modules() if isinstance(m, torch.nn.Conv2d)]) == 4
+    assert not hasattr(policy.actor, "depth_encoder")
+    changed = {**observations, "object_state": observations["object_state"] + 100}
+    assert not torch.equal(policy.act_inference(changed), expected)
     torch.testing.assert_close(policy.std, torch.full((spec["num_actions"],), 0.2))
     for key, value in policy.critic.state_dict().items():
         torch.testing.assert_close(value, teacher.tracker_state[f"critic.{key}"], rtol=0, atol=0)
@@ -133,7 +133,8 @@ def test_gaussian_sampling_old_log_prob_and_pre_step_snapshot(spec, teacher, obs
     torch.testing.assert_close(stored_action, expected)
     torch.testing.assert_close(log_prob.squeeze(-1), expected_log_prob)
     torch.testing.assert_close(stored_mean, mean)
-    assert algorithm.storage.arrays["head_depth"].dtype == np.uint16
+    assert "head_depth" not in algorithm.storage.arrays
+    assert algorithm.storage.arrays["object_state"].dtype == np.float32
 
 
 def test_gae_reuses_rsl_rl_and_handles_timeout_bootstrap(spec, teacher, observations):
@@ -180,7 +181,7 @@ def test_ppo_bc_updates_all_student_branches_and_critic_but_not_teacher_or_norms
     teacher_before = copy.deepcopy(teacher.state_dict())
     norms_before = copy.deepcopy(policy.actor.vector_normalizers.state_dict())
     critic_norm_before = copy.deepcopy(policy.critic_obs_normalizer.state_dict())
-    branches = [policy.actor.depth_encoder, policy.actor.vector_encoders, policy.actor.backbone, policy.critic]
+    branches = [*policy.actor.vector_encoders.values(), policy.actor.backbone, policy.critic]
     before = [copy.deepcopy(branch.state_dict()) for branch in branches]
     std_before = policy.std.detach().clone()
     collect(algorithm, observations)
@@ -368,15 +369,16 @@ def test_keep_all_and_failed_atomic_save_preserve_snapshots(spec, teacher, obser
     assert len(list(tmp_path.glob("model_*.pt"))) == 3
 
 
-def test_resume_rejects_old_training_but_old_student_weights_still_load(spec, teacher, observations, tmp_path):
+def test_resume_and_student_loading_reject_old_observation_contract(spec, teacher, observations, tmp_path):
     runner = make_runner(spec, teacher, observations, tmp_path)
     state = runner._student_snapshot()
     state["schema"] = "weave-depth-dagger-v2"
-    assert state["schema"] in STUDENT_SCHEMAS
+    assert state["schema"] not in STUDENT_SCHEMAS
     torch.save(state, tmp_path / "legacy.pt")
     with pytest.raises(ValueError, match="Legacy"):
         runner.load(str(tmp_path / "legacy.pt"))
-    runner.load_student(str(tmp_path / "legacy.pt"))
+    with pytest.raises(ValueError, match="Incompatible student"):
+        runner.load_student(str(tmp_path / "legacy.pt"))
     assert runner.iteration == 0 and runner.algorithm._it == 0
 
 

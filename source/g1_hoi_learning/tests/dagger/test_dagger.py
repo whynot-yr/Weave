@@ -1,4 +1,4 @@
-"""Preserved perception, evaluation, legacy buffer and simulation-device binding."""
+"""Object-state transfer, evaluation, vector buffers and simulation-device binding."""
 
 import copy
 
@@ -8,8 +8,9 @@ import torch
 from g1_hoi_learning.algorithms.dagger.evaluation import assign_eval_clips, summarize
 from g1_hoi_learning.algorithms.dagger.io import read_yaml
 from g1_hoi_learning.algorithms.dagger.networks import (
+    STUDENT_GROUPS,
     TEACHER_GROUPS,
-    VECTOR_GROUPS,
+    TRANSFER_GROUPS,
     StudentWeaveActor,
     TeacherWeaveActor,
     export_student,
@@ -113,13 +114,13 @@ def test_teacher_matches_original_actorcritic(spec, observations):
     assert not teacher.training and not teacher.normalizer.training
 
 
-def test_transfer_group_normalizers_and_student_has_no_object_leak(spec, teacher, observations):
-    student = StudentWeaveActor(spec)
+def test_transfer_group_normalizers_and_student_has_no_reference_leak(spec, student_spec, teacher, observations):
+    student = StudentWeaveActor(student_spec)
     student.initialize_from_teacher(teacher)
     offset = 0
     for group in TEACHER_GROUPS:
         width = spec["group_dims"][group]
-        if group in VECTOR_GROUPS:
+        if group in TRANSFER_GROUPS:
             norm = student.vector_normalizers[group]
             torch.testing.assert_close(norm._mean, teacher.normalizer._mean[:, offset : offset + width])
             for key, value in student.vector_encoders[group].state_dict().items():
@@ -130,9 +131,13 @@ def test_transfer_group_normalizers_and_student_has_no_object_leak(spec, teacher
     for key, value in student.backbone.state_dict().items():
         torch.testing.assert_close(value, teacher.actor[1].state_dict()[key])
     expected = student(observations)
-    changed = dict(observations, object_state=torch.full_like(observations["object_state"], 1e6))
+    changed = dict(observations, robot_privileged=torch.full_like(observations["robot_privileged"], 1e6))
+    changed["ref_motion_body"] = torch.full_like(observations["ref_motion_body"], float("nan"))
+    changed["ref_motion_object"] = torch.full_like(observations["ref_motion_object"], float("nan"))
     torch.testing.assert_close(student(changed), expected, rtol=0, atol=0)
-    assert len([m for m in student.depth_encoder.modules() if isinstance(m, torch.nn.Conv2d)]) == 4
+    assert not hasattr(student, "depth_encoder")
+    changed = dict(observations, object_state=observations["object_state"] + 10)
+    assert not torch.equal(student(changed), expected)
     teacher_before = copy.deepcopy(teacher.state_dict())
     with torch.no_grad():
         next(student.backbone.parameters()).add_(1)
@@ -152,14 +157,14 @@ def test_rollout_owns_pre_step_data_reuses_allocation_and_has_no_history(observa
     expected = target.clone()
     rollout = make_rollout(observations, target)
     arrays = dict(rollout.arrays)
+    object_before = observations["object_state"].clone()
     target.zero_()
-    observations["head_depth"].zero_()
+    observations["object_state"].zero_()
     np.testing.assert_array_equal(rollout.arrays["teacher_action"], expected.numpy())
-    assert rollout.arrays["head_depth"].dtype == np.uint16
-    assert rollout.arrays["head_depth"].min() == 2000
+    assert "head_depth" not in rollout.arrays
+    assert rollout.arrays["object_state"].dtype == np.float32
     obs, actions = rollout.batch(np.arange(4), "cpu")
-    assert obs["head_depth"].shape == (4, 1, 128, 128)
-    torch.testing.assert_close(obs["head_depth"], torch.full_like(obs["head_depth"], 0.2))
+    torch.testing.assert_close(obs["object_state"], object_before)
     np.testing.assert_array_equal(actions.numpy(), expected.numpy())
     rollout.clear()
     with pytest.raises(ValueError, match="incomplete"):
@@ -167,14 +172,14 @@ def test_rollout_owns_pre_step_data_reuses_allocation_and_has_no_history(observa
     rollout.add(observations, target, {"episode_step": torch.arange(4)})
     assert all(rollout.arrays[key] is value for key, value in arrays.items())
     assert rollout.arrays["teacher_action"].max() == 0
-    assert rollout.arrays["head_depth"].max() == 0
+    assert rollout.arrays["object_state"].max() == 0
     with pytest.raises(ValueError, match="full"):
         rollout.add(observations, target, {"episode_step": torch.arange(4)})
 
 
 def test_rollout_rejects_nonfinite_data_before_it_can_be_trained(observations):
     rollout = RolloutBuffer(4, 1)
-    observations["head_depth"][0, 0, 0, 0] = float("nan")
+    observations["object_state"][0, 0] = float("nan")
     with pytest.raises(ValueError, match="Non-finite"):
         rollout.add(observations, torch.zeros(4, 3), {})
     assert rollout.size == 0
@@ -182,7 +187,7 @@ def test_rollout_rejects_nonfinite_data_before_it_can_be_trained(observations):
 
 def test_epoch_balanced_partition_covers_all_samples_and_reshuffles():
     rollout = RolloutBuffer(7, 1)
-    rollout.size = 7  # Index-only contract; no depth allocation needed.
+    rollout.size = 7  # Index-only contract; no observation allocation needed.
     torch.manual_seed(42)
     first = list(rollout.minibatches(3))
     second = list(rollout.minibatches(3))
@@ -192,14 +197,13 @@ def test_epoch_balanced_partition_covers_all_samples_and_reshuffles():
     assert not np.array_equal(np.concatenate(first), np.concatenate(second))
 
 
-def test_export_is_student_only_and_matches_online(spec, teacher, observations, tmp_path):
-    student = StudentWeaveActor(spec)
+def test_export_is_student_only_and_matches_online(student_spec, teacher, observations, tmp_path):
+    student = StudentWeaveActor(student_spec)
     student.initialize_from_teacher(teacher)
     path = tmp_path / "student.pt"
     export_student(student, str(path))
     inference = torch.jit.load(str(path))
-    depth = torch.full((4, 1, 128, 128), 2.0)
-    actual = inference(*(observations[g] for g in VECTOR_GROUPS), depth)
+    actual = inference(*(observations[g] for g in STUDENT_GROUPS))
     torch.testing.assert_close(actual, student(observations))
 
 
@@ -232,4 +236,41 @@ def test_torchrun_binds_local_device_before_simulation_app_starts(monkeypatch, r
     path = Path(__file__).resolve().parents[4] / "scripts/dagger/train.py"
     prefix = path.read_text().split("import g1_hoi_learning.tasks", 1)[0]
     exec(compile(prefix, str(path), "exec"), {})
-    assert observed == {"device": f"cuda:{rank}", "distributed": True, "cameras": True}
+    assert observed == {"device": f"cuda:{rank}", "distributed": True, "cameras": False}
+
+
+@pytest.mark.parametrize(
+    "video_enabled,no_video,expected", [(True, False, True), (True, True, False), (False, False, False)]
+)
+def test_evaluation_enables_rendering_only_for_video(monkeypatch, tmp_path, video_enabled, no_video, expected):
+    import sys
+    import types
+    from pathlib import Path
+
+    observed = {}
+
+    class Launcher:
+        @staticmethod
+        def add_app_launcher_args(parser):
+            parser.add_argument("--device", default="cuda:0")
+
+        def __init__(self, args):
+            observed["cameras"] = args.enable_cameras
+            self.app = object()
+
+    parent = types.ModuleType("isaaclab")
+    parent.__path__ = []
+    module = types.ModuleType("isaaclab.app")
+    module.AppLauncher = Launcher
+    monkeypatch.setitem(sys.modules, "isaaclab", parent)
+    monkeypatch.setitem(sys.modules, "isaaclab.app", module)
+    config = tmp_path / "eval.yaml"
+    config.write_text(f"video:\n  enabled: {str(video_enabled).lower()}\n")
+    argv = ["eval.py", "--checkpoint", "unused.pt", "--config", str(config)]
+    if no_video:
+        argv.append("--no_video")
+    monkeypatch.setattr(sys, "argv", argv)
+    path = Path(__file__).resolve().parents[4] / "scripts/dagger/eval.py"
+    prefix = path.read_text().split("import g1_hoi_learning.tasks", 1)[0]
+    exec(compile(prefix, str(path), "exec"), {})
+    assert observed["cameras"] is expected

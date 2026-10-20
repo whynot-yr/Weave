@@ -1,4 +1,4 @@
-"""RSL-RL PPO storage adapter: CPU uint16 depth and pre-step owned snapshots."""
+"""RSL-RL PPO storage adapter: CPU vector observations and pre-step owned snapshots."""
 
 from __future__ import annotations
 
@@ -7,10 +7,9 @@ import torch
 from rsl_rl.storage import RolloutStorage
 
 from g1_hoi_learning.algorithms.dagger.distributed import DistributedContext
-from g1_hoi_learning.algorithms.vision import DEPTH_FAR, depth_from_mm
 
 
-class DepthRolloutStorage(RolloutStorage):
+class VectorRolloutStorage(RolloutStorage):
     """Reuse RSL-RL's GAE; replace its full-float allocation and batch transfer."""
 
     def __init__(self, num_envs, rollout_steps, obs, context: DistributedContext):
@@ -27,7 +26,7 @@ class DepthRolloutStorage(RolloutStorage):
         self.arrays = {
             key: np.empty(
                 (self.capacity, *value.shape[1:]),
-                dtype=np.uint16 if key == "head_depth" else value.detach().cpu().numpy().dtype,
+                dtype=value.detach().cpu().numpy().dtype,
             )
             for key, value in obs.items()
         }
@@ -56,10 +55,6 @@ class DepthRolloutStorage(RolloutStorage):
         for key, value in values.items():
             if value.shape[0] != self.num_envs or not torch.isfinite(value).all():
                 raise ValueError(f"Non-finite or invalid rollout observation: {key}")
-        depth = values["head_depth"]
-        if (depth < 0).any() or (depth > 1).any():
-            raise ValueError("Expected preprocessed depth in [0, 1]")
-        values["head_depth"] = (depth * (1000 * DEPTH_FAR)).round().to(torch.uint16)
         start, stop = self.size, self.size + self.num_envs
         for key, value in values.items():
             array = value.cpu().numpy()
@@ -121,11 +116,10 @@ class DepthRolloutStorage(RolloutStorage):
         yield from np.array_split(torch.randperm(self.size).numpy(), num_mini_batches)
 
     def batch(self, indices, device):
-        """Decode/transfer only this microbatch; metadata stays on the CPU."""
+        """Transfer only this microbatch; metadata stays on the CPU."""
         if not len(indices) or np.any(indices < 0) or np.any(indices >= self.size):
             raise ValueError("Invalid rollout indices")
         obs = {key: torch.from_numpy(self.arrays[key][indices]).to(device) for key in self.obs_keys}
-        obs["head_depth"] = depth_from_mm(obs["head_depth"])
 
         def take(name):
             return getattr(self, name).flatten(0, 1)[indices].to(device)

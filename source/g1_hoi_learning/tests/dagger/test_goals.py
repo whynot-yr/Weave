@@ -188,7 +188,7 @@ def goal_setup(spec, teacher, observations):
     return goal_spec, student, obs
 
 
-def test_goal_encoders_transfer_only_proprio_and_backbone(teacher, goal_setup):
+def test_goal_encoders_transfer_live_object_proprio_and_backbone(teacher, goal_setup):
     spec, student, obs = goal_setup
     assert student.vector_encoders["goal_robot_pose"][0].in_features == 62
     assert student.vector_encoders["goal_object_pose"][0].in_features == 9
@@ -203,13 +203,42 @@ def test_goal_encoders_transfer_only_proprio_and_backbone(teacher, goal_setup):
     means = student(obs)
     changed = {key: value for key, value in obs.items() if key in student.observation_groups}
     torch.testing.assert_close(student(changed), means, rtol=0, atol=0)
-    for group in ("ref_motion_body", "ref_motion_object", "object_state", "robot_privileged"):
+    for group in ("ref_motion_body", "ref_motion_object", "robot_privileged"):
         changed[group] = torch.full_like(obs[group], float("nan"))
     torch.testing.assert_close(student(changed), means, rtol=0, atol=0)
     teacher_mean = teacher(obs)
     changed = dict(obs, goal_robot_pose=obs["goal_robot_pose"] + 100, goal_object_pose=obs["goal_object_pose"] - 100)
     torch.testing.assert_close(teacher(changed), teacher_mean, rtol=0, atol=0)
     assert not torch.equal(student(changed), means)
+
+
+def test_object_state_normalization_and_encoder_match_teacher_without_parameter_sharing(teacher, goal_setup):
+    _, student, obs = goal_setup
+    captured = {}
+    student_encoder = student.vector_encoders["object_state"]
+    teacher_encoder = teacher.actor[0].encoders[2]
+    for key, value in student_encoder.state_dict().items():
+        torch.testing.assert_close(value, teacher_encoder.state_dict()[key], rtol=0, atol=0)
+    assert all(a.data_ptr() != b.data_ptr() for a, b in zip(student_encoder.parameters(), teacher_encoder.parameters()))
+    hooks = [
+        student_encoder.register_forward_pre_hook(lambda module, args: captured.update(student=args[0].clone())),
+        teacher_encoder.register_forward_pre_hook(lambda module, args: captured.update(teacher=args[0].clone())),
+    ]
+    try:
+        student(obs)
+        teacher(obs)
+    finally:
+        for hook in hooks:
+            hook.remove()
+    torch.testing.assert_close(captured["student"], captured["teacher"], rtol=0, atol=0)
+    goal = obs["goal_object_pose"].clone()
+    before = student(obs)
+    obs["object_state"] += 1
+    assert not torch.equal(student(obs), before)
+    torch.testing.assert_close(obs["goal_object_pose"], goal, rtol=0, atol=0)
+    with torch.no_grad():
+        next(student_encoder.parameters()).add_(1)
+    assert any(not torch.equal(a, b) for a, b in zip(student_encoder.parameters(), teacher_encoder.parameters()))
 
 
 def test_goal_ppo_storage_gradients_and_teacher_isolation(spec, teacher, goal_setup):
@@ -250,9 +279,7 @@ def test_goal_runner_resume_export_and_legacy_contract_rejection(spec, teacher, 
     runner.load(str(tmp_path / "model_1.pt"))
     assert runner.iteration == runner.algorithm._it == 1
     inference = torch.jit.load(str(tmp_path / "student_policy.pt"))
-    torch.testing.assert_close(
-        inference(*(obs[g] for g in GOAL_VECTOR_GROUPS), torch.full((4, 1, 128, 128), 2.0)), student(obs)
-    )
+    torch.testing.assert_close(inference(*(obs[g] for g in GOAL_VECTOR_GROUPS)), student(obs))
     legacy = copy.deepcopy(state)
     legacy["schema"], legacy["actor_spec"] = "weave-depth-dagger-v3", teacher.spec
     torch.save(legacy, tmp_path / "legacy.pt")
@@ -266,6 +293,4 @@ def test_goal_export_accepts_only_student_inputs(goal_setup, tmp_path):
     _, student, obs = goal_setup
     export_student(student, str(tmp_path / "goal.pt"))
     exported = torch.jit.load(str(tmp_path / "goal.pt"))
-    torch.testing.assert_close(
-        exported(*(obs[g] for g in GOAL_VECTOR_GROUPS), torch.full((4, 1, 128, 128), 2.0)), student(obs)
-    )
+    torch.testing.assert_close(exported(*(obs[g] for g in GOAL_VECTOR_GROUPS)), student(obs))

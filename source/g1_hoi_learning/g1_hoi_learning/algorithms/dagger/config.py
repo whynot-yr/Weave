@@ -1,4 +1,4 @@
-"""3904770 PPO+BC settings with the current depth student and per-rank storage."""
+"""3904770 PPO+BC settings with the goal/object-state student and per-rank storage."""
 
 import math
 from dataclasses import dataclass

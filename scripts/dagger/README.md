@@ -1,7 +1,7 @@
-# Terminal-goal depth student + historical 3904770 PPO/DAgger
+# Terminal-goal/object-state student + historical 3904770 PPO/DAgger
 
 Restored from commit 3904770889ee67b34113df01f3f5533add0a468b under
-algorithms/distillation/, adapted for the current student and depth storage.
+algorithms/distillation/, adapted for the current student and vector storage.
 
 ~~~text
 BC  = MSE(student action mean, frozen teacher action)
@@ -15,28 +15,27 @@ all updates. First iteration is BC only; subsequent iterations gradually
 increase PPO's contribution. After 6000 iterations training is pure PPO.
 The teacher never controls the robot.
 
-## Initialization and preserved perception
+## Initialization and observations
 
 Fresh runs initialize from the **teacher**, not the previous model_1000:
 
-- Student proprio encoder and SimBa: copied from teacher Actor.
-- Student proprio normalizer: copied from teacher statistics and fixed.
+- Student object_state/proprio encoders and SimBa: copied from teacher Actor into independent parameters.
+- Student object_state/proprio normalizers: copied by group from teacher statistics and fixed.
 - Goal robot/object MLPs: randomly initialized, with the teacher reference encoders' hidden widths.
 - Goal normalization: Identity (joint radians, positions in metres, rot6d unchanged).
-- Current depth CNN: randomly initialized.
 - Independent Critic and its normalizer: copied from teacher Critic.
 - State-independent per-action Gaussian standard deviation: starts at 0.2.
 - Optimizers, counters and BC schedule: start fresh.
 
-CNN, vector encoders, SimBa, Critic and std are trainable. Teacher parameters and
+All four vector encoders, SimBa, Critic and std are trainable. Teacher parameters and
 **all normalization statistics stay fixed**. Unlike the historical environment,
 this adapter also fixes the Critic normalizer.
 
 ~~~text
 goal_robot_pose  [62] -> new trainable MLP -----------------+
 goal_object_pose  [9] -> new trainable MLP -----------------+
-head_depth           -> current trainable 4-layer CNN -----+-> concat -> SimBa -> action mean
-robot_proprio        -> teacher-initialized, trainable MLP +
+object_state   [221] -> teacher-initialized, trainable MLP -+-> concat -> SimBa -> action mean
+robot_proprio  [153] -> teacher-initialized, trainable MLP -+
 ~~~
 
 The default `student.observation_mode: terminal_goal` uses the last frame of the
@@ -55,17 +54,20 @@ Original time-varying reference observations remain available to the frozen
 teacher and independent Critic. Rewards, terminations and the BC/PPO schedule
 continue tracking the original trajectory; this is a change to Student inputs.
 
-Depth remains single-frame [B,1,128,128] from the existing TiledCamera.
-Valid 0.1-10m depths are quantized to millimeters and divided by 10m; invalid
-pixels become zero. CNN channels remain 1->32->64->128->128, with stride-two
-3x3 convolutions, SiLU, and the existing latent projection. No extra image
-normalization, noisy reference input, historical camera or depth degradation is
-introduced. Teacher-provided motion/environment/reward definitions stay in effect.
+`student.perception_mode: object_state` directly reuses the exact same
+`obs["object_state"]` as the teacher on every control step. This is live simulated
+state, not a reset snapshot or terminal reference. The current teacher group has
+221 dimensions: anchor-relative object position (3), rot6d (6), finger-to-surface
+vectors (30), BPS/SDF shape features (128), and actual per-body contacts (54).
+The saved teacher configuration determines the exact dimensions and ordering.
+There is no depth observation, CNN, policy head camera, or image rollout buffer.
+Training and evaluation without video disable camera rendering. Evaluation RGB
+video uses an independent external view and never enters the policy.
 
 Critic uses the teacher's critic groups (normally ref_motion_body,
-ref_motion_object, object_state, robot_privileged). Privileged state is used
-only by Critic and teacher. Goal Student Actor does not read ref_motion_body,
-ref_motion_object, object_state or robot_privileged. Critic does not share the CNN.
+ref_motion_object, object_state, robot_privileged). Live object_state is also
+deliberately available to Student. Goal Student Actor does not read
+ref_motion_body, ref_motion_object or robot_privileged.
 
 ## Train
 
@@ -81,7 +83,7 @@ python scripts/dagger/train.py \
 
 Teacher params/agent.yaml and params/env.yaml are discovered next to the
 checkpoint. If needed pass --teacher_agent_config and --teacher_env_config.
-Teacher and Critic weights load strictly; Student transfers proprio and SimBa.
+Teacher and Critic weights load strictly; Student transfers object_state, proprio and SimBa.
 Without --motion_files,
 saved teacher paths are used. Multiple objects are supported; RSI samples clips.
 
@@ -98,7 +100,7 @@ CUDA_VISIBLE_DEVICES=0,1 bash scripts/dagger/train_ddp.sh \
   --motion_files /path/to/training_motions.npz
 ~~~
 
-Each rank owns a simulator, camera, Actor/Critic, frozen teacher, optimizer and
+Each rank owns a simulator, Actor/Critic, frozen teacher, optimizer and
 current rollout. LOCAL_RANK binds physics/rendering before SimulationApp starts.
 Environment, action-sampling and minibatch streams use seed + rank; initial
 weights are synchronized.
@@ -116,8 +118,8 @@ weights are synchronized.
 
 Both GPUs collect, then both train. Stepping pauses during updates.
 No historical replay is kept. Each epoch reshuffles and visits every local
-sample; balanced partitions retain every sample. Only a microbatch is decoded
-and moved to GPU. Loss weighting is microbatch size / effective minibatch size.
+sample; balanced partitions retain every sample. Only a microbatch is moved to
+GPU. Loss weighting is microbatch size / effective minibatch size.
 Non-final forward/backward calls use DDP no_sync; final backward synchronizes
 accumulated Actor, Critic and std gradients. Clip/step run once per effective
 minibatch. No additional historical manual gradient reduction is called.
@@ -126,7 +128,9 @@ RSL-RL PPO supplies action/value/log-prob recording, timeout reward bootstrap
 and GAE. The storage adapter owns state BEFORE env.step, since simulator buffers
 can change in place. RSL-RL GAE runs on CPU; advantage statistics are combined
 across ranks. Teacher labels use the stored same-state observations.
-Preallocated uint16 depth storage is about 4 GiB per rank at defaults and reused.
+Vector observations are stored as owned CPU snapshots. object_state is stored once
+and shared by the learner's Student/Teacher/Critic inputs. Removing depth saves
+about 4 GiB of rollout memory per rank at the default rollout size.
 
 Existing Muon + AdamW starts at 1e-4, decay 0.01 (AdamW parameters), gradient norm
 1.0. Global KL adapts learning rate with historical thresholds and synchronizes
@@ -142,7 +146,7 @@ Runs default to logs/dagger/<timestamp>/:
 - tensorboard/, metrics.jsonl: BC, surrogate/value losses, entropy, KL,
   clip fraction, explained variance, std, LR, BC/PPO weights, rewards/resets,
   samples/updates, per-rank timing and memory.
-- model_<completed_iterations>.pt: v4 training checkpoint.
+- model_<completed_iterations>.pt: v5 training checkpoint.
 - student_weights.pt: mean-Actor-only weights.
 - student_policy.pt: mean-Actor-only TorchScript export.
 
@@ -150,7 +154,7 @@ Runs default to logs/dagger/<timestamp>/:
 model_100.pt, model_200.pt, ..., model_11000.pt. Also save at invocation end.
 Optional keep_last_checkpoints: N prunes only after a successful atomic save.
 
-v4 saves separate Student (`actor_spec`) and Teacher (`teacher_actor_spec`)
+v5 saves separate Student (`actor_spec`) and Teacher (`teacher_actor_spec`)
 contracts, including goal source, coordinates, rotation layout and normalization.
 It also saves Actor, Critic, fixed normalizers, std, both optimizer states, LR,
 BC schedule, counters, teacher identity, environment, world size and each
@@ -162,22 +166,20 @@ CUDA_VISIBLE_DEVICES=0,1 bash scripts/dagger/train_ddp.sh \
   --resume logs/dagger/<run>/model_100.pt
 ~~~
 
-Strict resume requires v4, matching world size, per-rank environments and learning
+Strict resume requires v5, matching world size, per-rank environments and learning
 configuration. Memory/save controls may change; current YAML controls save
-interval/retention. Old v1/v2/v3 models remain evaluable with their original
-reference inputs but cannot resume goal training or load into the goal Actor.
-Start goal training fresh from the original Teacher checkpoint. Optional
+interval/retention. This pipeline starts fresh from the original Teacher checkpoint;
+old depth/reference Student checkpoints are not supported. Optional
 --student_checkpoint loads only compatible Actor contracts into a fresh run;
-it is not used by default. `student.observation_mode: reference` retains the
-original Student inputs and initialization for explicit baseline experiments.
+it is not used by default.
 
 ## Evaluate
 
 Use held-out clips for **one object per invocation**, following Weave's current
 `eval_mode` limitation. Evaluation automatically records an MP4 for every clip
 by default, using a single environment and the same rollout as the reported
-metrics. The scene is created once and reused across clips. Student depth inputs
-remain 128x128; the video uses an external RGB camera framing the robot and
+metrics. The scene is created once and reused across clips. The video uses an
+external RGB camera framing the robot and
 object together, increasing viewing distance when the object is farther away.
 Video mode uses one environment even if `--num_envs 32` is passed, and prints
 the actual configuration at startup.
@@ -235,8 +237,8 @@ The initial-pose profiles sample independent uniform offsets per trial:
 | `initial_medium` | ±0.005 m | ±1 degree |
 | `initial_large` | ±0.010 m | ±2 degrees |
 
-Only the object's actual initial pose changes, before observations and camera
-frames are read. Rotation is about the object's root position. Object height,
+Only the object's actual initial pose changes, before policy observations and any
+video frames are read. Rotation is about the object's root position. Object height,
 world velocities, robot initial state and reference trajectories remain unchanged;
 each trial starts at reference frame zero. Proprio noise, physical-parameter
 randomization and pushes remain disabled. Check a few videos to choose ranges
@@ -290,12 +292,12 @@ The exported student accepts four tensors in this order:
 ```text
 goal_robot_pose:  [B, 62]        (terminal q + anchor position + rot6d)
 goal_object_pose: [B, 9]         (terminal object position + rot6d)
-robot_proprio:    [B, D_proprio] (raw vector, normalization included)
-depth_m:          [B, 1, 128, 128] (image-plane depth in meters, preprocessing included)
+object_state:    [B, D_object]  (live Teacher-aligned group, normally 221)
+robot_proprio:   [B, D_proprio] (normally 153)
 ```
 
 It returns `[B, num_actions]` raw actions. Action processing remains external.
-Legacy reference-mode exports retain their original four positional inputs.
+Teacher-derived object_state/proprio normalization is included in the export.
 
 Simulator-free contract tests:
 

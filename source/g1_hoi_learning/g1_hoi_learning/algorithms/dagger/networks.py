@@ -1,4 +1,4 @@
-"""Frozen trajectory teacher and terminal-goal depth student, with legacy inference support."""
+"""Frozen trajectory teacher and terminal-goal student with shared live object observations."""
 
 from __future__ import annotations
 
@@ -10,37 +10,35 @@ from rsl_rl.networks import EmpiricalNormalization
 from torch import nn
 
 from g1_hoi_learning.algorithms.networks import MLPEncoder, SimBa, build_group_backbone
-from g1_hoi_learning.algorithms.vision import DEPTH_SIZE, DepthCNNEncoder, preprocess_depth
 
 TEACHER_GROUPS = ("ref_motion_body", "ref_motion_object", "object_state", "robot_proprio")
-VECTOR_GROUPS = ("ref_motion_body", "ref_motion_object", "robot_proprio")
-STUDENT_GROUPS = ("ref_motion_body", "ref_motion_object", "head_depth", "robot_proprio")
-GOAL_VECTOR_GROUPS = ("goal_robot_pose", "goal_object_pose", "robot_proprio")
-GOAL_STUDENT_GROUPS = ("goal_robot_pose", "goal_object_pose", "head_depth", "robot_proprio")
+STUDENT_GROUPS = ("goal_robot_pose", "goal_object_pose", "object_state", "robot_proprio")
+GOAL_VECTOR_GROUPS = STUDENT_GROUPS
+TRANSFER_GROUPS = ("object_state", "robot_proprio")
 
 
 def student_groups(spec: dict) -> tuple[str, ...]:
-    """Specs without a mode belong to the original reference-window student."""
-    mode = spec.get("observation_mode", "reference")
-    if mode == "terminal_goal":
-        return GOAL_STUDENT_GROUPS
-    if mode == "reference":
-        return STUDENT_GROUPS
-    raise ValueError(f"Unknown student observation mode: {mode}")
+    """The student uses terminal goals and the teacher's live object/proprio groups."""
+    if spec.get("observation_mode") != "terminal_goal" or spec.get("perception_mode") != "object_state":
+        raise ValueError("Student requires terminal_goal observations and object_state perception")
+    return STUDENT_GROUPS
 
 
 def student_actor_spec(teacher_spec: dict, group_dims: dict[str, int]) -> dict:
-    """Independent student contract; no temporal references or contact labels enter its actor."""
+    """Independent student contract; object_state retains the teacher's full live observation."""
     if group_dims["goal_robot_pose"] <= 9 or group_dims["goal_object_pose"] != 9:
         raise ValueError("Goal inputs must contain joint angles + anchor pose, and a 9D object pose")
-    if group_dims["robot_proprio"] != teacher_spec["group_dims"]["robot_proprio"]:
-        raise ValueError("Student and teacher proprioception dimensions differ")
+    for group in TRANSFER_GROUPS:
+        if group_dims[group] != teacher_spec["group_dims"][group]:
+            raise ValueError(f"Student and teacher {group} dimensions differ")
     spec = copy.deepcopy(teacher_spec)
     spec["observation_mode"] = "terminal_goal"
+    spec["perception_mode"] = "object_state"
     spec["group_dims"] = {g: group_dims[g] for g in GOAL_VECTOR_GROUPS}
     spec["encoder_specs"] = {
         "goal_robot_pose": copy.deepcopy(teacher_spec["encoder_specs"]["ref_motion_body"]),
         "goal_object_pose": copy.deepcopy(teacher_spec["encoder_specs"]["ref_motion_object"]),
+        "object_state": copy.deepcopy(teacher_spec["encoder_specs"]["object_state"]),
         "robot_proprio": copy.deepcopy(teacher_spec["encoder_specs"]["robot_proprio"]),
     }
     spec["goal_contract"] = {
@@ -127,56 +125,41 @@ class StudentWeaveActor(nn.Module):
         super().__init__()
         self.spec = copy.deepcopy(spec)
         self.observation_groups = student_groups(spec)
-        self.vector_groups = tuple(g for g in self.observation_groups if g != "head_depth")
-        self.goal_conditioned = spec.get("observation_mode") == "terminal_goal"
-        if self.goal_conditioned:
-            encoders = {}
-            for group in self.vector_groups:
-                options = dict(spec["encoder_specs"][group])
-                if options.pop("type") != "mlp":
-                    raise ValueError(f"Expected MLP student encoder for {group}")
-                encoders[group] = MLPEncoder(spec["group_dims"][group], spec["latent_dim"], **options)
-            self.vector_encoders = nn.ModuleDict(encoders)
-            backbone = SimBa(
-                len(self.observation_groups) * spec["latent_dim"],
-                spec["num_actions"],
-                spec["hidden_dim"],
-                spec["num_blocks"],
-                spec["expansion"],
-            )
-        else:
-            source = make_actor(spec)
-            self.vector_encoders = nn.ModuleDict(
-                {g: source[0].encoders[TEACHER_GROUPS.index(g)] for g in self.vector_groups}
-            )
-            backbone = source[1]
+        self.vector_groups = self.observation_groups
+        encoders = {}
+        for group in self.vector_groups:
+            options = dict(spec["encoder_specs"][group])
+            if options.pop("type") != "mlp":
+                raise ValueError(f"Expected MLP student encoder for {group}")
+            encoders[group] = MLPEncoder(spec["group_dims"][group], spec["latent_dim"], **options)
+        self.vector_encoders = nn.ModuleDict(encoders)
         self.vector_normalizers = nn.ModuleDict(
             {
                 g: normalizer(spec["group_dims"][g], spec["normalize"] and not g.startswith("goal_"))
                 for g in self.vector_groups
             }
         )
-        self.depth_encoder = DepthCNNEncoder(spec["latent_dim"])
-        self.backbone: SimBa = backbone
+        self.backbone = SimBa(
+            len(self.observation_groups) * spec["latent_dim"],
+            spec["num_actions"],
+            spec["hidden_dim"],
+            spec["num_blocks"],
+            spec["expansion"],
+        )
 
     @torch.no_grad()
     def initialize_from_teacher(self, teacher: TeacherWeaveActor):
-        if self.goal_conditioned:
-            shared = ("num_actions", "latent_dim", "hidden_dim", "num_blocks", "expansion", "normalize")
-            if any(self.spec[key] != teacher.spec[key] for key in shared) or (
-                self.spec["group_dims"]["robot_proprio"] != teacher.spec["group_dims"]["robot_proprio"]
-                or self.spec["encoder_specs"]["robot_proprio"] != teacher.spec["encoder_specs"]["robot_proprio"]
-            ):
-                raise ValueError("Teacher and goal student transfer contracts differ")
-            transfer_groups = ("robot_proprio",)
-        elif teacher.spec == self.spec:
-            transfer_groups = VECTOR_GROUPS
-        else:
-            raise ValueError("Teacher and student actor construction contracts differ")
+        shared = ("num_actions", "latent_dim", "hidden_dim", "num_blocks", "expansion", "normalize")
+        if any(self.spec[key] != teacher.spec[key] for key in shared) or any(
+            self.spec["group_dims"][group] != teacher.spec["group_dims"][group]
+            or self.spec["encoder_specs"][group] != teacher.spec["encoder_specs"][group]
+            for group in TRANSFER_GROUPS
+        ):
+            raise ValueError("Teacher and goal student transfer contracts differ")
         offset = 0
         for name in TEACHER_GROUPS:
             width = teacher.spec["group_dims"][name]
-            if name in transfer_groups:
+            if name in TRANSFER_GROUPS:
                 self.vector_encoders[name].load_state_dict(
                     teacher.actor[0].encoders[TEACHER_GROUPS.index(name)].state_dict(), strict=True
                 )
@@ -198,31 +181,29 @@ class StudentWeaveActor(nn.Module):
 
     def set_dagger_trainable(self):
         """Train the complete student actor while retaining fixed normalization."""
-        self.depth_encoder.requires_grad_(True)
         self.vector_encoders.requires_grad_(True)
         self.vector_normalizers.requires_grad_(False)
         self.backbone.requires_grad_(True)
 
     def forward(self, obs: Mapping[str, torch.Tensor]) -> torch.Tensor:
         latents = {g: self.vector_encoders[g](self.vector_normalizers[g](obs[g])) for g in self.vector_groups}
-        latents["head_depth"] = self.depth_encoder(obs["head_depth"])
         return self.backbone(torch.cat([latents[g] for g in self.observation_groups], dim=-1))
 
 
 class StudentInference(nn.Module):
-    """Export contract: three vector groups and NCHW image-plane depth in meters."""
+    """Export contract: terminal robot/object goals and live object/proprio vectors."""
 
     def __init__(self, student: StudentWeaveActor):
         super().__init__()
         self.student = copy.deepcopy(student).cpu().eval()
 
-    def forward(self, goal_robot_pose, goal_object_pose, robot_proprio, depth_m):
+    def forward(self, goal_robot_pose, goal_object_pose, object_state, robot_proprio):
         return self.student(
             {
-                self.student.vector_groups[0]: goal_robot_pose,
-                self.student.vector_groups[1]: goal_object_pose,
+                "goal_robot_pose": goal_robot_pose,
+                "goal_object_pose": goal_object_pose,
+                "object_state": object_state,
                 "robot_proprio": robot_proprio,
-                "head_depth": preprocess_depth(depth_m),
             }
         )
 
@@ -230,5 +211,4 @@ class StudentInference(nn.Module):
 def export_student(student: StudentWeaveActor, path: str):
     module = StudentInference(student)
     examples = tuple(torch.zeros(1, student.spec["group_dims"][g]) for g in student.vector_groups)
-    examples += (torch.ones(1, 1, DEPTH_SIZE, DEPTH_SIZE),)
     torch.jit.trace(module, examples).save(path)

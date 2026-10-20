@@ -187,11 +187,12 @@ python scripts/inspect_rollout.py ./datasets/floorlamp_rollout_100_seed42
 
 ---
 
-## Depth Student-Weave
+## Goal/Object-State Student-Weave
 
-Depth Student-Weave and teacher-action DAgger training/evaluation are documented in
-[scripts/dagger/README.md](scripts/dagger/README.md). The student uses 128×128 depth and a
-four-layer CNN, followed by the teacher's SimBa architecture.
+Student-Weave and teacher-action DAgger training/evaluation are documented in
+[scripts/dagger/README.md](scripts/dagger/README.md). The student uses terminal robot/object
+goals, the teacher's live object state, and robot proprioception, encoded by four MLPs
+followed by the teacher's SimBa architecture.
 
 ## 🧹 Code Formatting
 

@@ -9,6 +9,8 @@ import traceback
 from dataclasses import asdict
 from pathlib import Path
 
+import yaml
+
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -16,7 +18,7 @@ parser.add_argument("--config", default="configs/dagger/eval.yaml")
 parser.add_argument(
     "--checkpoint",
     required=True,
-    help="v1/v2/v3/v4 DAgger checkpoint or lightweight student weights (mean-action evaluation)",
+    help="v5 goal/object-state DAgger checkpoint or lightweight student weights (mean-action evaluation)",
 )
 parser.add_argument("--policy", choices=("student", "teacher"), default="student")
 parser.add_argument("--teacher_checkpoint", help="Relocated teacher baseline checkpoint")
@@ -35,7 +37,10 @@ parser.add_argument("--no_video", action="store_true", help="Disable MP4 recordi
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(headless=True)
 args = parser.parse_args()
-args.enable_cameras = True
+# Enable rendering only for the independent evaluation video, never for policy inputs.
+with open(args.config) as stream:
+    startup_config = yaml.safe_load(stream) or {}
+args.enable_cameras = not args.no_video and (startup_config.get("video") or {}).get("enabled", True)
 app = AppLauncher(args)
 simulation_app = app.app
 
@@ -64,8 +69,8 @@ def main():
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     state.pop("replay", None)
     if state.get("schema") not in STUDENT_SCHEMAS:
-        raise ValueError("Expected a depth DAgger checkpoint")
-    teacher_spec = state.get("teacher_actor_spec", state["actor_spec"])
+        raise ValueError("Expected a v5 goal/object-state DAgger checkpoint")
+    teacher_spec = state["teacher_actor_spec"]
     batch_size = args.num_envs if args.num_envs is not None else config.get("num_envs", 32)
     if batch_size < 1:
         raise ValueError("num_envs must be positive")
@@ -120,7 +125,7 @@ def main():
         device,
         {"commands": {"motion": {"motion_files": motion_files}}},
         evaluation=True,
-        student_observation_mode=spec.get("observation_mode", "reference"),
+        student_observation_mode=spec["observation_mode"],
     )
     initial_ids = [trial["clip_id"] for trial in trials[:num_envs]]
     env_cfg.commands.motion.eval_clip_ids = initial_ids
@@ -140,7 +145,8 @@ def main():
     report_metadata = {
         "checkpoint": str(Path(args.checkpoint).resolve()),
         "policy": args.policy,
-        "student_observation_mode": spec.get("observation_mode", "reference"),
+        "student_observation_mode": spec["observation_mode"],
+        "student_perception_mode": spec["perception_mode"],
         "motion_files": motion_files,
         "seed": seed,
         "selected_clip_ids": selected_clip_ids,
@@ -198,7 +204,7 @@ def main():
             if (
                 env.num_actions != spec["num_actions"]
                 or any(obs[g].shape[-1] != width for g, width in teacher_spec["group_dims"].items())
-                or any(obs[g].shape[-1] != spec["group_dims"][g] for g in student_groups(spec) if g != "head_depth")
+                or any(obs[g].shape[-1] != spec["group_dims"][g] for g in student_groups(spec))
             ):
                 raise ValueError("Evaluation observation/action dimensions differ from training")
             evaluator = ClipEvaluator(env, names)

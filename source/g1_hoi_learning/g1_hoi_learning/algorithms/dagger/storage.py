@@ -1,11 +1,9 @@
-"""Legacy action-label storage; active PPO uses distillation.storage.DepthRolloutStorage."""
+"""Action-label vector storage; active PPO uses distillation.storage.VectorRolloutStorage."""
 
 from __future__ import annotations
 
 import numpy as np
 import torch
-
-from g1_hoi_learning.algorithms.vision import DEPTH_FAR, depth_from_mm
 
 from .networks import STUDENT_GROUPS
 
@@ -37,11 +35,6 @@ class RolloutBuffer:
                 raise ValueError(f"Rollout batch dimension changed for {key}")
             if not torch.isfinite(value).all():
                 raise ValueError("Non-finite DAgger observation/action")
-        depth = values["head_depth"]
-        if (depth < 0).any() or (depth > 1).any():
-            raise ValueError("Expected preprocessed depth in [0, 1]")
-        # Quantize on the source device; transfer uint16 rather than a float image copy.
-        values["head_depth"] = (depth * (DEPTH_FAR * 1000)).round().to(torch.uint16)
         samples = {key: value.cpu().numpy() for key, value in values.items()}
         if not self.arrays:
             self.arrays = {
@@ -67,10 +60,9 @@ class RolloutBuffer:
         yield from np.array_split(indices, num_mini_batches)
 
     def batch(self, indices: np.ndarray, device: str):
-        """Decode only a microbatch; metadata never goes to the learner GPU."""
+        """Transfer only a microbatch; metadata never goes to the learner GPU."""
         if not len(indices) or np.any(indices < 0) or np.any(indices >= self.size):
             raise ValueError("Invalid rollout sample indices")
         obs = {group: torch.from_numpy(self.arrays[group][indices]).to(device) for group in STUDENT_GROUPS}
-        obs["head_depth"] = depth_from_mm(obs["head_depth"])
         target = torch.from_numpy(self.arrays["teacher_action"][indices]).to(device)
         return obs, target

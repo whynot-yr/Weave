@@ -21,6 +21,7 @@ from g1_hoi_learning.algorithms.dagger.networks import (
     actor_spec,
     make_actor,
     normalizer,
+    student_actor_spec,
 )
 from g1_hoi_learning.algorithms.distillation.networks import SimBaActorCriticTeacher
 from g1_hoi_learning.algorithms.networks import build_group_backbone
@@ -78,10 +79,16 @@ def teacher(spec):
 
 
 @pytest.fixture
+def student_spec(spec):
+    return student_actor_spec(spec, {**spec["group_dims"], "goal_robot_pose": 62, "goal_object_pose": 9})
+
+
+@pytest.fixture
 def observations(spec):
     obs = {g: torch.randn(4, dim) for g, dim in spec["group_dims"].items()}
     obs["robot_privileged"] = torch.randn(4, 8)
-    obs["head_depth"] = torch.full((4, 1, 128, 128), 0.2)
+    obs["goal_robot_pose"] = torch.randn(4, 62)
+    obs["goal_object_pose"] = torch.randn(4, 9)
     return obs
 
 
@@ -89,6 +96,8 @@ def make_policy(spec, teacher, student=None):
     from g1_hoi_learning.algorithms.dagger.networks import StudentWeaveActor
 
     if student is None:
-        student = StudentWeaveActor(spec)
+        student = StudentWeaveActor(
+            student_actor_spec(spec, {**spec["group_dims"], "goal_robot_pose": 62, "goal_object_pose": 9})
+        )
         student.initialize_from_teacher(teacher)
     return SimBaActorCriticTeacher(student, teacher, teacher.critic_spec, teacher.tracker_state)
