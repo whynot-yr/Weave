@@ -57,13 +57,3 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
 )
-
-gym.register(
-    id="G1-Inspire-HOI-Student-v0",
-    entry_point=_make_env,
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.student_env_cfg:G1StudentWeaveEnvCfg",
-        "dagger_cfg_entry_point": f"{agents.__name__}.dagger_cfg:DaggerTrainConfig",
-    },
-)

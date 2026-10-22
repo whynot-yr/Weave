@@ -14,8 +14,7 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/test/smalltable_42clip_var5.npz
-        #- ./data/train/floorlamp_805clip.npz
+        - ./data/test_prepend/smalltable_42clip_var5.npz
       eval_mode: true
       rsi: false
       debug_vis: false

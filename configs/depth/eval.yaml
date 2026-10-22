@@ -1,0 +1,24 @@
+# @package _global_
+#
+# Clip-wise evaluation of the depth student -- one env per clip.
+#
+#   python scripts/rsl_rl/eval.py --task=G1-Inspire-HOI-Depth-v0 --headless \
+#       --config-dir ./configs/depth --config-name eval \
+#       --checkpoint logs/rsl_rl/g1_inspire_hoi_depth/<run>/model_XXXX.pt
+
+defaults:
+  - train
+  - _self_
+
+env:
+  commands:
+    motion:
+      motion_files:
+        - ./data/test_prepend/smalltable_42clip_var5.npz
+      eval_mode: true
+      rsi: false
+      debug_vis: false
+
+agent:
+  policy:
+    compile: false

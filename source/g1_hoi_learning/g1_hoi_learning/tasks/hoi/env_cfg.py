@@ -10,9 +10,10 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg,TiledCameraCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+
 from . import mdp
 from .mdp.commands import MotionCommandCfg
 
@@ -36,7 +37,6 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.GroundPlaneCfg(
             usd_path=GROUND_PLANE_USD_PATH,
             size=(100.0, 100.0),
-            color=(0.8, 0.8, 0.8),
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 static_friction=1.0,
                 dynamic_friction=1.0,
@@ -45,135 +45,13 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    robot: ArticulationCfg = G1_INSPIRE_CFG.replace(
-        prim_path="{ENV_REGEX_NS}/Robot"
-    )
-
-    head_camera = TiledCameraCfg(
-        # Camera 会成为 torso_link 的子 Prim，随机器人运动
-        prim_path="{ENV_REGEX_NS}/Robot/torso_link/head_camera",
-        update_period=0.0,
-        width=640,
-        height=480,
-        data_types=["rgb", "depth"],
-        spawn=sim_utils.PinholeCameraCfg(
-            # 约等于 D435 RGB 相机的水平视场；精确值可按标定参数调整
-            focal_length=15.3,
-            horizontal_aperture=20.955,
-            focus_distance=400.0,
-            clipping_range=(0.1, 10.0),
-        ),
-        offset=TiledCameraCfg.OffsetCfg(
-            # 来自 URDF 的 d435_joint
-            pos=(0.0576235, 0.01753, 0.42987),
-            # rpy=(0, 0.8307767, 0) 转换成 wxyz 四元数
-            rot=(0.9149597, 0.0, 0.4035453, 0.0),
-            # G1/URDF 坐标：+X 向前、+Z 向上
-            convention="world",
-        ),
-    )
-
-
+    robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     object: RigidObjectCfg = MISSING   # set in G1HoiLearningEnvCfg.__post_init__ from motion_file's object_name
 
-    # Visual-only background curtains.
-    # Enclose a 9 m x 9 m area, with 3 m tall curtains resting on the ground.
-    # Coordinates are relative to each parallel environment origin.
-    curtain_left = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/CurtainLeft",
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, -4.5, 1.5),
-            rot=(0.7071068, 0.0, 0.0, -0.7071068),
-        ),
-        spawn=sim_utils.CuboidCfg(
-            size=(0.02, 9.0, 3.0),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=False,
-            ),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.12, 0.12, 0.12),
-                roughness=0.8,
-            ),
-        ),
-    )
-
-    curtain_back = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/CurtainBack",
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(-4.5, 0.0, 1.5),
-            rot=(1.0, 0.0, 0.0, 0.0),
-        ),
-        spawn=sim_utils.CuboidCfg(
-            size=(0.02, 9.0, 3.0),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=False,
-            ),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.12, 0.12, 0.12),
-                roughness=0.8,
-            ),
-        ),
-    )
-
-    curtain_right = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/CurtainRight",
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, 4.5, 1.5),
-            rot=(0.7071068, 0.0, 0.0, -0.7071068),
-        ),
-        spawn=sim_utils.CuboidCfg(
-            size=(0.02, 9.0, 3.0),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=False,
-            ),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.12, 0.12, 0.12),
-                roughness=0.8,
-            ),
-        ),
-    )
-    
-    curtain_front = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/CurtainFront",
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(4.5, 0.0, 1.5),
-                rot=(1.0, 0.0, 0.0, 0.0),
-            ),
-            spawn=sim_utils.CuboidCfg(
-                size=(0.02, 9.0, 3.0),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    kinematic_enabled=True,
-                    disable_gravity=True,
-                ),
-                collision_props=sim_utils.CollisionPropertiesCfg(
-                    collision_enabled=False,
-                ),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.12, 0.12, 0.12),
-                    roughness=0.8,
-                ),
-            ),
-        )
-
-
-
-
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
-        spawn=sim_utils.DomeLightCfg(color=(1.0, 1.0, 1.0), intensity=800.0,enable_color_temperature=True, color_temperature=3000),
+        spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
 
     contact_sensor = ContactSensorCfg(
@@ -289,6 +167,36 @@ class ObservationsCfg:
 
         motion_future_obj_pos_b = ObsTerm(func=mdp.motion_future_obj_pos_b, params={"command_name": "motion"})
         motion_future_obj_ori_b = ObsTerm(func=mdp.motion_future_obj_ori_b, params={"command_name": "motion"})
+        motion_future_contact_label = ObsTerm(func=mdp.motion_future_contact_label, params={"command_name": "motion"})
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class NoisyRefMotionBodyCfg(ObsGroup):
+        """Future robot reference expressed in the actor's noisy odometry frame."""
+
+        motion_future_joint_pos = ObsTerm(func=mdp.motion_future_joint_pos, params={"command_name": "motion"})
+        motion_future_anchor_pos_b = ObsTerm(
+            func=mdp.motion_future_anchor_pos_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_anchor_ori_b = ObsTerm(
+            func=mdp.motion_future_anchor_ori_noisy_b, params={"command_name": "motion"}
+        )
+
+        def __post_init__(self):
+            self.concatenate_terms = True
+
+    @configclass
+    class NoisyRefMotionObjectCfg(ObsGroup):
+        """Future object reference expressed in the same noisy odometry frame."""
+
+        motion_future_obj_pos_b = ObsTerm(
+            func=mdp.motion_future_obj_pos_noisy_b, params={"command_name": "motion"}
+        )
+        motion_future_obj_ori_b = ObsTerm(
+            func=mdp.motion_future_obj_ori_noisy_b, params={"command_name": "motion"}
+        )
         motion_future_contact_label = ObsTerm(func=mdp.motion_future_contact_label, params={"command_name": "motion"})
 
         def __post_init__(self):
@@ -431,30 +339,6 @@ class EventCfg:
           },
       },
   )
-    """Configuration for events."""
-
-    randomize_light_startup = EventTerm(
-        func=mdp.randomize_dome_light,
-        mode="startup",
-        params={
-            "light_path": "/World/DomeLight",
-            "intensity_range": (400.0, 1200.0),
-            "color_temperature_range": (2500.0, 6500.0),
-        },
-    )
-
-    randomize_light_interval = EventTerm(
-        func=mdp.randomize_dome_light,
-        mode="interval",
-        interval_range_s=(4.0, 4.0),
-        is_global_time=True,
-        params={
-            "light_path": "/World/DomeLight",
-            "intensity_range": (400.0, 1200.0),
-            "color_temperature_range": (2500.0, 6500.0),
-        },
-    )
-
 
 @configclass
 class RewardsCfg:
@@ -530,7 +414,7 @@ class RewardsCfg:
         weight=0.5,
         params={
             "sensor_cfg": SceneEntityCfg("feet_contact_sensor", body_names=".*_ankle_roll_link"),
-            "threshold": 0.3,
+            "threshold": 0.25,
         },
     )
     joint_limit = RewTerm(
@@ -595,7 +479,7 @@ class TerminationsCfg:
 class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
     """G1 HOI learning environment config."""
 
-    scene: G1HoiLearningSceneCfg = G1HoiLearningSceneCfg(num_envs=4096, env_spacing=10.0)
+    scene: G1HoiLearningSceneCfg = G1HoiLearningSceneCfg(num_envs=4096, env_spacing=4.0)
     commands: CommandsCfg = CommandsCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

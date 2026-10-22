@@ -13,7 +13,7 @@ Memory layout::
     clip_object:  (M,)    object index each clip manipulates
 
 Each env owns a fixed object (``env_object``) and plays one clip of that object at a time
-(``env_clip``, re-sampled every episode).
+(``env_clip``, re-sampled every episode). 
 Frame access is via ``buffer[clip_starts[env_clip] + time_steps]``.
 """
 
@@ -30,16 +30,18 @@ from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_error_magnitude
+from isaaclab.utils.math import (
+    quat_error_magnitude,
+)
 
-from g1_hoi_learning.algorithms.perturbations import offset_object_pose
 from g1_hoi_learning.objects import ASSET_DIR
+
 
 # ----------------------------------------------------------------------- TensorClass
 
 class MotionData(TensorClass):
     """
-    Per-frame motion state.
+    Per-frame motion state. 
     """
 
     motion_id:        torch.Tensor   # (..., ) long  — which motion this frame belongs to
@@ -197,33 +199,22 @@ class MotionCommand(CommandTerm):
         self._eval_clip_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.future_offsets = torch.tensor(cfg.future_offsets, dtype=torch.long, device=self.device)
 
+        # Episode-constant odometry bias used only by noisy actor observations.
+        self.odom_pos_error_b = torch.zeros(self.num_envs, 3, device=self.device)
+        self.odom_quat_error = torch.zeros(self.num_envs, 4, device=self.device)
+        self.odom_quat_error[:, 0] = 1.0
+
         # clip-wise evaluation
         if self.cfg.eval_mode:
-            # Assigned by the evaluator before each reset; never alter reference data.
-            self._eval_object_pose_offsets = torch.zeros(self.num_envs, 3, device=self.device)
             if self.motion.num_objects != 1:
                 raise ValueError(
                     f"eval_mode requires a single-object motion set, got {self.motion.num_objects} objects "
                 )
-            if self.cfg.eval_clip_ids:
-                if len(self.cfg.eval_clip_ids) != self.num_envs:
-                    raise ValueError(
-                        "eval_clip_ids must contain exactly one clip id per environment: "
-                        f"got {len(self.cfg.eval_clip_ids)} ids for {self.num_envs} envs"
-                    )
-                self._eval_env_clip = torch.tensor(
-                    self.cfg.eval_clip_ids, dtype=torch.long, device=self.device
-                )
-                if torch.any(self._eval_env_clip < 0) or torch.any(self._eval_env_clip >= self.motion.num_clips):
-                    raise ValueError(
-                        f"eval_clip_ids must be in [0, {self.motion.num_clips - 1}]"
-                    )
-            else:
-                self._eval_env_clip = torch.arange(self.num_envs, device=self.device) % self.motion.num_clips
-            if not self.cfg.eval_clip_ids and self.num_envs != self.motion.num_clips:
+            if self.num_envs != self.motion.num_clips:
                 print(
                     f"[WARN] eval_mode: num_envs={self.num_envs} != num_clips={self.motion.num_clips};"
                 )
+            self._eval_env_clip = torch.arange(self.num_envs, device=self.device) % self.motion.num_clips
             self.env_clip = self._eval_env_clip.clone()
 
         # caches refreshed in _update_command
@@ -245,30 +236,9 @@ class MotionCommand(CommandTerm):
         self.metrics["error_object_rot"] = torch.zeros(self.num_envs, device=self.device)
 
         # initial frame so properties are valid before the first _update_command
-        self._refresh_goal()
         self._refresh_caches()
 
     # ------------------------------------------------------------------- caches
-
-    def _refresh_goal(self, env_ids: Sequence[int] | None = None) -> None:
-        """Lock each selected clip's terminal pose, independently of its RSI start frame."""
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.device)
-        clips = self.env_clip[env_ids]
-        indices = self.motion.clip_starts[clips] + self.motion.clip_lengths[clips] - 1
-        buffer = self.motion.buffer
-        values = {
-            "_goal_joint_pos": buffer.joint_pos[indices],
-            "_goal_anchor_pos": buffer.body_pos_w[indices, self.anchor_index],
-            "_goal_anchor_quat": buffer.body_quat_w[indices, self.anchor_index],
-            "_goal_obj_pos": buffer.object_pos_w[indices],
-            "_goal_obj_quat": buffer.object_quat_w[indices],
-        }
-        for name, value in values.items():
-            if not hasattr(self, name):
-                cache = torch.empty((self.num_envs, *value.shape[1:]), device=value.device, dtype=value.dtype)
-                setattr(self, name, cache)
-            getattr(self, name)[env_ids] = value
 
     def _refresh_caches(self) -> None:
         self._current_frame = self.motion.frames(self.env_clip, self.time_steps)
@@ -290,28 +260,6 @@ class MotionCommand(CommandTerm):
     @property
     def command(self) -> torch.Tensor:
         return torch.cat([self.joint_pos, self.joint_vel], dim=1)
-
-    # ------------------------------------------------------------------- fixed terminal goals
-
-    @property
-    def goal_joint_pos(self) -> torch.Tensor:
-        return self._goal_joint_pos
-
-    @property
-    def goal_anchor_pos_w(self) -> torch.Tensor:
-        return self._goal_anchor_pos + self._env.scene.env_origins
-
-    @property
-    def goal_anchor_quat_w(self) -> torch.Tensor:
-        return self._goal_anchor_quat
-
-    @property
-    def goal_obj_pos_w(self) -> torch.Tensor:
-        return self._goal_obj_pos + self._env.scene.env_origins
-
-    @property
-    def goal_obj_quat_w(self) -> torch.Tensor:
-        return self._goal_obj_quat
 
     # ------------------------------------------------------------------- motion-data properties (current frame)
 
@@ -492,7 +440,7 @@ class MotionCommand(CommandTerm):
             return
         objects = self.env_object[env_ids]
 
-        # 1. pick a clip and starting frame within the environment's fixed object
+        # 1. pick which clip each reset env plays (within its fixed object); always start at frame 0
         if self.cfg.eval_mode:
             self.env_clip[env_ids] = self._eval_env_clip[env_ids]
             self.time_steps[env_ids] = 0
@@ -504,9 +452,6 @@ class MotionCommand(CommandTerm):
         else:
             self.env_clip[env_ids] = self.motion.first_clip(objects)
             self.time_steps[env_ids] = 0
-
-        # Also runs on training clip rollover, which does not call CommandTerm.reset().
-        self._refresh_goal(env_ids)
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
         new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])
@@ -544,13 +489,7 @@ class MotionCommand(CommandTerm):
             new_frames.object_lin_vel_w,
             new_frames.object_ang_vel_w,
         ], dim=-1)
-        if self.cfg.eval_mode:
-            obj_state = offset_object_pose(obj_state, self._eval_object_pose_offsets[env_ids])
         self.object.write_root_state_to_sim(obj_state, env_ids=env_ids)
-        if self.cfg.eval_mode:
-            # env.reset() computes observations before the next command.compute().
-            # Refresh now so the first policy input uses this clip's frame zero.
-            self._refresh_caches()
 
     def _update_command(self):
         self.time_steps += 1
@@ -631,9 +570,6 @@ class MotionCommandCfg(CommandTermCfg):
 
     eval_mode: bool = False
     """Clip-wise evaluation. Requires a single-object motion set."""
-
-    eval_clip_ids: list[int] = []
-    """Optional explicit clip id for every environment in eval mode."""
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""

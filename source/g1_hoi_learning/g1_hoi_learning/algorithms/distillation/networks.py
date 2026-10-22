@@ -1,118 +1,107 @@
-"""3904770 actor/critic/teacher contract adapted to the goal/object-state student.
-
-The student's inputs, vector encoders, normalization and tracker initialization stay in
-dagger.networks. RSL-RL supplies the Gaussian distribution and critic interfaces.
-"""
-
 from __future__ import annotations
 
-import copy
-
 import torch
-from rsl_rl.modules import ActorCritic
-from torch import nn
+import torch.nn as nn
+from tensordict import TensorDict
 
-from g1_hoi_learning.algorithms.dagger.networks import StudentWeaveActor, TeacherWeaveActor, normalizer
-from g1_hoi_learning.algorithms.networks import build_group_backbone
+from rsl_rl.networks import EmpiricalNormalization
 
-
-def critic_spec(agent_cfg: dict, obs) -> dict:
-    policy = agent_cfg["policy"]
-    groups = list(agent_cfg["obs_groups"]["critic"])
-    if not groups or any(obs[g].ndim != 2 for g in groups):
-        raise ValueError("Critic requires flat observation groups from the teacher configuration")
-    return {
-        "groups": groups,
-        "group_dims": {g: obs[g].shape[-1] for g in groups},
-        "encoder_specs": copy.deepcopy(policy["encoder_hidden_dims"]),
-        "latent_dim": policy["latent_dim"],
-        "hidden_dim": policy["critic_hidden_dim"],
-        "num_blocks": policy["critic_num_blocks"],
-        "expansion": policy["expansion"],
-        "normalize": policy.get("critic_obs_normalization", False),
-    }
+from g1_hoi_learning.algorithms.ppo.networks import SimBaActorCritic, build_group_backbone
 
 
-class SimBaActorCriticTeacher(ActorCritic):
-    """Historical PPO+BC policy with the current student as its mean actor."""
+class SimBaActorCriticTeacher(SimBaActorCritic):
+    """SimBa actor-critic + a frozen SimBa teacher for the distillation + RL stage.
+
+    Initialized from a *tracker* checkpoint (``actor.*`` / ``critic.*``) via
+    :meth:`load_state_dict`:
+
+      - ``teacher``        <- tracker frozen actor
+      - student ``critic`` <- tracker critic
+      - student ``actor``  <- tracker actor SimBa backbone + the per-group encoders of
+                              the groups shared with the teacher.
+    """
 
     def __init__(
         self,
-        student: StudentWeaveActor,
-        teacher: TeacherWeaveActor,
-        spec: dict,
-        teacher_state: dict,
-        init_noise_std: float = 0.2,
-    ):
-        nn.Module.__init__(self)
-        self.actor = student
-        self.actor.set_dagger_trainable()
-        self.teacher = teacher
-        self.critic_spec = copy.deepcopy(spec)
-        self.obs_groups = {"critic": spec["groups"]}
-        self.actor_obs_normalization = False  # Already performed inside StudentWeaveActor.
-        self.actor_obs_normalizer = nn.Identity()
-        self.critic_obs_normalization = spec["normalize"]
-        obs = {g: torch.empty(1, spec["group_dims"][g]) for g in spec["groups"]}
-        self.critic = build_group_backbone(
+        obs: TensorDict,
+        obs_groups: dict[str, list[str]],
+        num_actions: int,
+        teacher_hidden_dim: int = 2048,
+        teacher_num_blocks: int = 2,
+        teacher_obs_normalization: bool = True,
+        latent_dim: int = 256,
+        encoder_hidden_dims: dict[str, list[int]] | None = None,
+        expansion: int = 1,
+        **kwargs,
+    ) -> None:
+        super().__init__(
             obs,
-            spec["groups"],
-            spec["encoder_specs"],
-            spec["latent_dim"],
-            1,
-            spec["hidden_dim"],
-            spec["num_blocks"],
-            spec["expansion"],
-        )
-        self.critic_obs_normalizer = normalizer(sum(spec["group_dims"].values()), spec["normalize"])
-        self.critic.load_state_dict(
-            {k.removeprefix("critic."): v for k, v in teacher_state.items() if k.startswith("critic.")}, strict=True
-        )
-        self.critic_obs_normalizer.load_state_dict(
-            {
-                k.removeprefix("critic_obs_normalizer."): v
-                for k, v in teacher_state.items()
-                if k.startswith("critic_obs_normalizer.")
-            },
-            strict=True,
-        )
-        self.state_dependent_std = False
-        self.noise_std_type = "scalar"
-        self.std = nn.Parameter(torch.full((student.spec["num_actions"],), init_noise_std))
-        torch.distributions.Normal.set_default_validate_args(False)
-        self.distribution = None
-        self.teacher.requires_grad_(False)
-        self.critic_obs_normalizer.requires_grad_(False)
-        self.train()
+            obs_groups,
+            num_actions,
+            latent_dim=latent_dim,
+            encoder_hidden_dims=encoder_hidden_dims,
+            expansion=expansion,
+            **kwargs,
+        )  # student actor + critic + std
 
-    def get_actor_obs(self, obs):
-        # Each student group is normalized and encoded inside StudentWeaveActor.
-        return obs
-
-    def update_normalization(self, obs):
-        """Teacher-derived statistics stay fixed; goal inputs use identity normalization."""
-
-    def train(self, mode: bool = True):
-        super().train(mode)
+        self.teacher = build_group_backbone(
+            obs,
+            obs_groups["teacher"],
+            encoder_hidden_dims,
+            latent_dim,
+            output_dim=num_actions,
+            hidden_dim=teacher_hidden_dim,
+            num_blocks=teacher_num_blocks,
+            expansion=expansion,
+        )
         self.teacher.eval()
-        self.critic_obs_normalizer.eval()
-        return self
+        for p in self.teacher.parameters():
+            p.requires_grad_(False)
 
-    @torch.no_grad()
-    def teacher_act(self, obs):
-        return self.teacher(obs)
-
-    def forward(self, obs, actions):
-        """One DDP forward contains every trainable branch used by PPO+BC."""
-        self._update_distribution(obs)
-        return (
-            self.action_mean,
-            self.action_std,
-            self.evaluate(obs),
-            self.get_actions_log_prob(actions),
-            self.entropy,
+        num_teacher_obs = sum(obs[g].shape[-1] for g in obs_groups["teacher"])
+        self.teacher_obs_normalization = teacher_obs_normalization
+        self.teacher_obs_normalizer = (
+            EmpiricalNormalization(num_teacher_obs) if teacher_obs_normalization else nn.Identity()
         )
+        self.loaded_teacher = False
 
-    @torch.no_grad()
-    def protect_std(self):
-        self.std.clamp_(min=1e-4)
+    def teacher_act(self, obs: TensorDict) -> torch.Tensor:
+        x = self.teacher_obs_normalizer(torch.cat([obs[g] for g in self.obs_groups["teacher"]], dim=-1))
+        with torch.no_grad():
+            return self.teacher(x)
+
+    # ------------------------------------------------------------------ loading
+
+    def load_state_dict(self, state_dict: dict, strict: bool = True) -> bool:
+        # Resume: a distillation checkpoint already carries teacher.* -> load everything.
+        if any(k.startswith("teacher.") for k in state_dict):
+            nn.Module.load_state_dict(self, state_dict, strict=strict)
+            self.loaded_teacher = True
+            return True
+        # Fresh init from a TRACKER checkpoint (actor.* / critic.* / *_obs_normalizer.* / std).
+        self._load_from_tracker(state_dict)
+        self.loaded_teacher = True
+        return False
+
+    def _load_from_tracker(self, sd: dict) -> None:
+        def sub(prefix: str) -> dict:
+            return {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
+
+        # 1. teacher <- tracker actor
+        self.teacher.load_state_dict(sub("actor."), strict=True)
+        self.teacher.eval()
+        if self.teacher_obs_normalization:
+            self.teacher_obs_normalizer.load_state_dict(sub("actor_obs_normalizer."), strict=True)
+
+        # 2. student critic <- tracker critic
+        self.critic.load_state_dict(sub("critic."), strict=True)
+        if self.critic_obs_normalization:
+            self.critic_obs_normalizer.load_state_dict(sub("critic_obs_normalizer."), strict=True)
+
+        # 3. student actor <- tracker actor
+        # SimBa backbone + encoders of the groups shared with the teacher
+        self.actor[1].load_state_dict(sub("actor.1."), strict=True)  # SimBa backbone
+        teacher_groups = self.obs_groups["teacher"]
+        for i, g in enumerate(self.obs_groups["policy"]):
+            if i < len(teacher_groups) and g == teacher_groups[i]:  # shared slot
+                self.actor[0].encoders[i].load_state_dict(sub(f"actor.0.encoders.{i}."), strict=True)

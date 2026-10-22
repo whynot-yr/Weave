@@ -1,11 +1,16 @@
-"""3904770 PPO+BC restored for the current student and standalone DaggerRunner.
+"""Distillation + RL — SimBa actor-critic with a frozen SimBa teacher, Muon.
 
-The adapted constructors accept existing student/config objects, so they are
-constructed directly rather than registered in RSL-RL's class-name factory.
+Registers the distillation+RL pair into ``on_policy_runner`` so ``eval(class_name)``
+in the runner can resolve them.
 """
+
+import rsl_rl.runners.on_policy_runner as _opr
 
 from .algorithm import MuonPPODistill
 from .networks import SimBaActorCriticTeacher
+
+_opr.SimBaActorCriticTeacher = SimBaActorCriticTeacher
+_opr.MuonPPODistill = MuonPPODistill
 
 __all__ = [
     "MuonPPODistill",
