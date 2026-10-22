@@ -103,5 +103,6 @@ class SimBaActorCriticTeacher(SimBaActorCritic):
         self.actor[1].load_state_dict(sub("actor.1."), strict=True)  # SimBa backbone
         teacher_groups = self.obs_groups["teacher"]
         for i, g in enumerate(self.obs_groups["policy"]):
-            if i < len(teacher_groups) and g == teacher_groups[i]:  # shared slot
-                self.actor[0].encoders[i].load_state_dict(sub(f"actor.0.encoders.{i}."), strict=True)
+            if g in teacher_groups:
+                teacher_index = teacher_groups.index(g)
+                self.actor[0].encoders[i].load_state_dict(sub(f"actor.0.encoders.{teacher_index}."), strict=True)

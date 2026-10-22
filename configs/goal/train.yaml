@@ -1,0 +1,21 @@
+# @package _global_
+# Network defaults match the historical 512-wide distillation example.
+# Match policy widths, blocks, latent size and encoder specs to the actual teacher.
+defaults:
+  - G1-Inspire-HOI-Goal-v0
+  - _self_
+
+env:
+  scene:
+    num_envs: 4096
+  commands:
+    motion:
+      motion_files:
+        - ./data/test/floorlamp_033_var5.npz
+      rsi: true
+
+agent:
+  experiment_name: g1_inspire_hoi_goal
+  num_steps_per_env: 32
+  max_iterations: 100000
+  save_interval: 100
