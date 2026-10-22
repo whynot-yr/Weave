@@ -180,6 +180,9 @@ class MotionCommand(CommandTerm):
     cfg: "MotionCommandCfg"
 
     def __init__(self, cfg: "MotionCommandCfg", env: ManagerBasedRLEnv):
+        if cfg.goal_sampling_mode not in ("terminal", "random_future"):
+            raise ValueError(f"Invalid goal_sampling_mode: {cfg.goal_sampling_mode}")
+
         # Set up robot references before super().__init__ because it calls _set_debug_vis_impl
         self.robot: Articulation = env.scene[cfg.asset_name]
         self.object: RigidObject = env.scene[cfg.object_name]
@@ -192,6 +195,7 @@ class MotionCommand(CommandTerm):
 
         # per-env state
         self.time_steps     = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.goal_time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         # env -> object (fixed for the whole run; drives object spawn + surface)
         self.env_object     = torch.arange(self.num_envs, device=self.device) % self.motion.num_objects
         # env -> current clip within that object (re-sampled every episode); init to the object's first clip
@@ -236,13 +240,34 @@ class MotionCommand(CommandTerm):
         self.metrics["error_object_rot"] = torch.zeros(self.num_envs, device=self.device)
 
         # initial frame so properties are valid before the first _update_command
-        self._refresh_goal()
+        self._resample_goal()
         self._refresh_caches()
 
     # ------------------------------------------------------------------- caches
 
+    def _resample_goal(self, env_ids: Sequence[int] | None = None) -> None:
+        """Select terminal or strictly future goal frames, then cache their poses."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        else:
+            env_ids = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+        if env_ids.numel() == 0:
+            return
+
+        last = self.motion.clip_lengths[self.env_clip[env_ids]] - 1
+        if self.cfg.goal_sampling_mode == "terminal":
+            self.goal_time_steps[env_ids] = last
+        else:
+            # Uniform integer in [t + 1, last]; at the final frame, hold last.
+            low = torch.minimum(self.time_steps[env_ids] + 1, last)
+            count = last - low + 1
+            offset = (torch.rand(env_ids.numel(), device=self.device) * count).long()
+            self.goal_time_steps[env_ids] = low + offset
+
+        self._refresh_goal(env_ids)
+
     def _refresh_goal(self, env_ids: Sequence[int] | None = None) -> None:
-        """Own each selected clip's final pose, independently of its RSI start."""
+        """Cache the selected goal poses independently of the current reference frame."""
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
         else:
@@ -251,7 +276,7 @@ class MotionCommand(CommandTerm):
             return
 
         clips = self.env_clip[env_ids]
-        indices = self.motion.clip_starts[clips] + self.motion.clip_lengths[clips] - 1
+        indices = self.motion.clip_starts[clips] + self.goal_time_steps[env_ids]
         buffer = self.motion.buffer
         values = {
             "_goal_joint_pos": buffer.joint_pos[indices],
@@ -287,7 +312,7 @@ class MotionCommand(CommandTerm):
     def command(self) -> torch.Tensor:
         return torch.cat([self.joint_pos, self.joint_vel], dim=1)
 
-    # ------------------------------------------------------------------- fixed terminal goals
+    # ------------------------------------------------------------------- goal poses
 
     @property
     def goal_joint_pos(self) -> torch.Tensor:
@@ -501,8 +526,8 @@ class MotionCommand(CommandTerm):
             self.env_clip[env_ids] = self.motion.first_clip(objects)
             self.time_steps[env_ids] = 0
 
-        # Also runs on clip rollover: the terminal frame is unrelated to the RSI start.
-        self._refresh_goal(env_ids)
+        # Also runs on clip rollover: select goals relative to the new clip/start.
+        self._resample_goal(env_ids)
 
         # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
         new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])
@@ -553,6 +578,14 @@ class MotionCommand(CommandTerm):
             torch.minimum(self.time_steps, clip_end - 1, out=self.time_steps)
         else:
             self._resample_command(torch.where(self.time_steps >= clip_end)[0])
+
+        if self.cfg.goal_sampling_mode == "random_future":
+            # Rollover may have changed clips and already sampled their new goals.
+            last = self.motion.clip_lengths[self.env_clip] - 1
+            reached = self.time_steps >= self.goal_time_steps
+            can_advance = self.time_steps < last
+            self._resample_goal(torch.where(reached & can_advance)[0])
+
         # refresh caches once for the rest of the step
         self._refresh_caches()
 
@@ -619,6 +652,9 @@ class MotionCommandCfg(CommandTermCfg):
 
     future_offsets: list[int] = [0, 5, 10, 15, 20]
     """Frame offsets for observation (0 = current frame)."""
+
+    goal_sampling_mode: str = "terminal"
+    """terminal: fixed final frame; random_future: resample future goals when reference time reaches them."""
 
     rsi: bool = True
     """Random State Initialization: start from random frame (training) or frame 0 (evaluation)."""

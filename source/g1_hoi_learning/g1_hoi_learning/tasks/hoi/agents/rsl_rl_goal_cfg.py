@@ -1,4 +1,4 @@
-"""RSL-RL PPO+BC configuration for the terminal-goal student."""
+"""RSL-RL PPO+BC configuration for the goal-conditioned student."""
 
 from typing import Any
 

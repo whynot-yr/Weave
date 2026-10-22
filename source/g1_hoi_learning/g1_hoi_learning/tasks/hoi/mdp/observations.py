@@ -20,7 +20,7 @@ from .geometry import SampledSurfaceQuery, load_bps_sdf_assets, sample_sdf_trili
 
 
 def goal_robot_pose(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Terminal joints and anchor pose in the current actual robot anchor frame."""
+    """Goal joints and anchor pose in the current actual robot anchor frame."""
     command: MotionCommand = env.command_manager.get_term(command_name)
     pos, quat = subtract_frame_transforms(
         command.robot_anchor_pos_w,
@@ -33,7 +33,7 @@ def goal_robot_pose(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
 
 
 def goal_object_pose(env: ManagerBasedEnv, command_name: str) -> torch.Tensor:
-    """Terminal object pose in the current actual robot anchor frame."""
+    """Goal object pose in the current actual robot anchor frame."""
     command: MotionCommand = env.command_manager.get_term(command_name)
     pos, quat = subtract_frame_transforms(
         command.robot_anchor_pos_w,

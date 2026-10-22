@@ -1,4 +1,4 @@
-"""Terminal-goal student observations on the base HOI environment."""
+"""Student observations with staged random future goals on the base HOI environment."""
 
 from isaaclab.managers import ObservationGroupCfg, ObservationTermCfg
 from isaaclab.utils import configclass
@@ -34,3 +34,7 @@ class GoalObservationsCfg(ObservationsCfg):
 @configclass
 class G1HoiGoalEnvCfg(G1HoiLearningEnvCfg):
     observations: GoalObservationsCfg = GoalObservationsCfg()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.commands.motion.goal_sampling_mode = "random_future"

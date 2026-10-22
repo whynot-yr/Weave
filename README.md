@@ -190,9 +190,16 @@ python scripts/inspect_rollout.py ./datasets/floorlamp_rollout_100_seed42
 ## Goal/Object-State Student-Weave
 
 Student-Weave and teacher-action DAgger training/evaluation are documented in
-[scripts/dagger/README.md](scripts/dagger/README.md). The student uses terminal robot/object
+[scripts/dagger/README.md](scripts/dagger/README.md). The student uses robot/object
 goals, the teacher's live object state, and robot proprioception, encoded by four MLPs
 followed by the teacher's SimBa architecture.
+
+`G1-Inspire-HOI-Goal-v0` samples a goal frame uniformly from `[t + 1, T]`, where `t` is
+the current reference frame and `T` is the clip's final frame index. The goal stays fixed
+until reference time reaches it, then a new future goal is sampled. At `T`, the final goal
+is held until the existing clip-end/reset logic runs. This applies in both training and
+evaluation; switching goals does not reset robot/object state. Set
+`env.commands.motion.goal_sampling_mode=terminal` to use fixed final-frame goals instead.
 
 ## 🧹 Code Formatting
 

@@ -63,7 +63,8 @@ def command():
     cmd.body_indices = [0, 1]
     cmd.env_object, cmd.env_clip = torch.zeros(3, dtype=torch.long), torch.tensor([0, 2, 1])
     cmd.time_steps, cmd.future_offsets = torch.tensor([1, 0, 3]), torch.tensor([0, 2])
-    cmd.cfg = SimpleNamespace(eval_mode=False, rsi=True)
+    cmd.goal_time_steps = torch.zeros(3, dtype=torch.long)
+    cmd.cfg = SimpleNamespace(eval_mode=False, rsi=True, goal_sampling_mode="terminal")
     origins = torch.tensor([[100.0, 0, 0], [0, 100.0, 0], [0, 0, 100.0]])
     cmd._env = SimpleNamespace(scene=SimpleNamespace(env_origins=origins))
     actual = SimpleNamespace(
@@ -80,7 +81,7 @@ def command():
         data=actual, write_root_state_to_sim=write_root, write_joint_state_to_sim=lambda *args, **kwargs: None
     )
     cmd.object = SimpleNamespace(write_root_state_to_sim=lambda *args, **kwargs: None)
-    cmd._refresh_goal()
+    cmd._resample_goal()
     cmd._refresh_caches()
     return cmd
 
@@ -119,6 +120,150 @@ def test_eval_reset_preserves_frame_zero_reference(command):
     assert command.time_steps.tolist() == [0, 0, 0]
     torch.testing.assert_close(command.joint_pos[:, 0], torch.tensor([0.04, 0.0, 0.10]))
     torch.testing.assert_close(command.goal_joint_pos[:, 0], torch.tensor([0.09, 0.03, 0.12]))
+
+
+def assert_goal_matches_selected_frame(command):
+    frames = command.motion.frames(command.env_clip, command.goal_time_steps)
+    torch.testing.assert_close(command.goal_joint_pos, frames.joint_pos)
+    torch.testing.assert_close(command._goal_anchor_pos, frames.body_pos_w[:, command.anchor_index])
+    torch.testing.assert_close(command.goal_anchor_quat_w, frames.body_quat_w[:, command.anchor_index])
+    torch.testing.assert_close(command._goal_obj_pos, frames.object_pos_w)
+    torch.testing.assert_close(command.goal_obj_quat_w, frames.object_quat_w)
+
+
+@pytest.mark.parametrize("draw, expected", [(0.0, [1, 1, 2]), (0.5, [2, 2, 4]), (0.999999, [3, 2, 5])])
+def test_random_goal_sampling_uses_each_clips_future_interval(command, monkeypatch, draw, expected):
+    command.cfg.goal_sampling_mode = "random_future"
+    command.time_steps = torch.tensor([0, 0, 1])
+    # Distinguish orientation frames as well as position/joint frames.
+    angle = torch.arange(13).float() / 13
+    quats = torch.stack((angle.cos(), torch.zeros(13), torch.zeros(13), angle.sin()), dim=-1)
+    command.motion.buffer.body_quat_w[:] = quats[:, None, :]
+    command.motion.buffer.object_quat_w[:] = quats
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.full((n,), draw, device=device))
+
+    command._resample_goal()
+
+    assert command.goal_time_steps.tolist() == expected
+    assert_goal_matches_selected_frame(command)
+
+
+def test_random_goals_hold_and_switch_at_reference_time_without_reset(command, monkeypatch):
+    command.cfg.goal_sampling_mode = "random_future"
+    command.cfg.eval_mode = True
+    command.time_steps = torch.tensor([0, 0, 1])
+    command.goal_time_steps = torch.tensor([2, 2, 4])
+    command._refresh_goal()
+    before = command.goal_joint_pos.clone()
+
+    def reject_sim_write(*args, **kwargs):
+        pytest.fail("A goal switch must not reset robot/object state")
+
+    monkeypatch.setattr(command.robot, "write_root_state_to_sim", reject_sim_write)
+    monkeypatch.setattr(command.robot, "write_joint_state_to_sim", reject_sim_write)
+    monkeypatch.setattr(command.object, "write_root_state_to_sim", reject_sim_write)
+    draws = []
+
+    def rand(n, *, device):
+        draws.append(n)
+        return torch.zeros(n, device=device)
+
+    monkeypatch.setattr(torch, "rand", rand)
+
+    command._update_command()  # t = [1, 1, 2]: no goal reached.
+    assert command.goal_time_steps.tolist() == [2, 2, 4]
+    torch.testing.assert_close(command.goal_joint_pos, before)
+    assert draws == []
+
+    command._update_command()  # t = [2, 2, 3]: only env 0 needs a new goal.
+    assert command.goal_time_steps.tolist() == [3, 2, 4]
+    torch.testing.assert_close(command.goal_joint_pos[1:], before[1:])
+    assert draws == [1]
+    assert_goal_matches_selected_frame(command)
+
+    command._update_command()  # t = [3, 2, 4]: only env 2 needs a new goal.
+    assert command.goal_time_steps.tolist() == [3, 2, 5]
+    assert draws == [1, 1]
+    assert_goal_matches_selected_frame(command)
+
+    for _ in range(3):
+        command._update_command()
+    assert command.time_steps.tolist() == [3, 2, 5]
+    assert command.goal_time_steps.tolist() == [3, 2, 5]
+    assert draws == [1, 1]  # Final goals are held without resampling.
+
+
+def test_random_goal_partial_rsi_reset_preserves_other_envs(command, monkeypatch):
+    command.cfg.goal_sampling_mode = "random_future"
+    before = command.goal_joint_pos.clone()
+    before_steps = command.goal_time_steps.clone()
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.full((n,), 0.25, device=device))
+
+    command._resample_command([0])
+
+    assert command.env_clip.tolist() == [1, 2, 1]
+    assert command.time_steps[0].item() == 1
+    assert command.goal_time_steps[0].item() == 3
+    torch.testing.assert_close(command.goal_time_steps[1:], before_steps[1:])
+    torch.testing.assert_close(command.goal_joint_pos[1:], before[1:])
+    torch.testing.assert_close(command.joint_pos, command.motion.frames(command.env_clip, command.time_steps).joint_pos)
+    assert_goal_matches_selected_frame(command)
+
+
+@pytest.mark.parametrize("new_clip, start, goal", [(0, 0, 1), (1, 1, 3)])
+def test_random_goal_rollover_samples_once_for_new_clip(command, monkeypatch, new_clip, start, goal):
+    command.cfg.goal_sampling_mode = "random_future"
+    command.env_clip[0] = 1
+    command.time_steps = torch.tensor([5, 0, 0])
+    command.goal_time_steps = command.motion.clip_lengths[command.env_clip] - 1
+    command._refresh_goal()
+    before = command.goal_joint_pos.clone()
+    command.motion.sample_clip = lambda objects: torch.full_like(objects, new_clip)
+    draws = []
+
+    def rand(n, *, device):
+        draws.append(n)
+        return torch.full((n,), 0.25, device=device)
+
+    monkeypatch.setattr(torch, "rand", rand)
+
+    command._update_command()
+
+    assert command.env_clip[0].item() == new_clip
+    assert command.time_steps[0].item() == start
+    assert command.goal_time_steps[0].item() == goal
+    assert draws == [1, 1]  # One RSI draw and one goal draw; no duplicate goal selection.
+    torch.testing.assert_close(command.goal_joint_pos[1:], before[1:])
+    torch.testing.assert_close(command.joint_pos, command.motion.frames(command.env_clip, command.time_steps).joint_pos)
+    assert_goal_matches_selected_frame(command)
+
+
+@pytest.mark.parametrize("eval_mode", [False, True])
+def test_random_goals_handle_single_frame_clips(command, eval_mode):
+    command.cfg.goal_sampling_mode = "random_future"
+    command.cfg.eval_mode = eval_mode
+    command.motion.clip_lengths[0] = 1
+    command.motion.sample_clip = lambda objects: torch.zeros_like(objects)
+    command.env_clip.zero_()
+    command.time_steps.zero_()
+    command._resample_goal()
+
+    for _ in range(3):
+        command._update_command()
+        assert command.time_steps.tolist() == [0, 0, 0]
+        assert command.goal_time_steps.tolist() == [0, 0, 0]
+        assert_goal_matches_selected_frame(command)
+
+
+def test_random_goal_sampling_is_reproducible_with_fixed_seed(command):
+    command.cfg.goal_sampling_mode = "random_future"
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(42)
+        command._resample_goal()
+        before = command.goal_time_steps.clone()
+        torch.manual_seed(42)
+        command._resample_goal()
+    torch.testing.assert_close(command.goal_time_steps, before)
 
 
 def test_goal_observations_reanchor_world_target(command):
