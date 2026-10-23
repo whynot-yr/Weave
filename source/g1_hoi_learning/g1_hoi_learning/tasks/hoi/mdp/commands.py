@@ -24,6 +24,7 @@ import numpy as np
 import torch
 from tensordict import TensorClass
 
+import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import CommandTerm, CommandTermCfg
@@ -592,42 +593,67 @@ class MotionCommand(CommandTerm):
     # ------------------------------------------------------------------- debug viz
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        if debug_vis:
-            if not hasattr(self, "goal_anchor_vis"):
-                self.goal_anchor_vis = VisualizationMarkers(
-                    self.cfg.anchor_visualizer_cfg.replace(prim_path="/World/Visuals/Command/goal/anchor")
-                )
-                self.current_anchor_vis = VisualizationMarkers(
-                    self.cfg.anchor_visualizer_cfg.replace(prim_path="/World/Visuals/Command/current/anchor")
-                )
-                self.goal_body_vis = VisualizationMarkers(
-                    self.cfg.body_visualizer_cfg.replace(prim_path="/World/Visuals/Command/goal/bodies")
-                )
-                self.current_body_vis = VisualizationMarkers(
-                    self.cfg.body_visualizer_cfg.replace(prim_path="/World/Visuals/Command/current/bodies")
-                )
+        # CommandTerm calls this before motion/goal caches have been initialized.
+        if debug_vis and not hasattr(self, "_pose_visualizers"):
+            ids = self.cfg.goal_vis_env_ids
+            if ids is not None and any(i < 0 or i >= self.num_envs for i in ids):
+                raise ValueError(f"goal_vis_env_ids must be in [0, {self.num_envs}), got {ids}")
+            self._vis_env_ids = slice(None) if ids is None else torch.tensor(ids, device=self.device, dtype=torch.long)
+            self._pose_visualizers = {}
+            specs = {
+                "reference_anchor": (self.cfg.anchor_visualizer_cfg, self.cfg.show_reference_bodies),
+                "reference_bodies": (self.cfg.body_visualizer_cfg, self.cfg.show_reference_bodies),
+                "current_bodies": (self.cfg.body_visualizer_cfg, self.cfg.show_reference_bodies),
+                "current_anchor": (self.cfg.body_visualizer_cfg, True),
+                "target_root": (self.cfg.anchor_visualizer_cfg, self.cfg.show_goal_poses),
+                "target_object": (self.cfg.anchor_visualizer_cfg, self.cfg.show_goal_poses),
+                "current_object": (self.cfg.body_visualizer_cfg, self.cfg.show_goal_poses),
+            }
+            for name, (cfg, enabled) in specs.items():
+                if enabled:
+                    self._pose_visualizers[name] = VisualizationMarkers(
+                        cfg.replace(prim_path=f"/World/Visuals/Command/{name}")
+                    )
+            # Position dots distinguish the targets while preserving standard XYZ axis colors.
+            if self.cfg.show_goal_poses:
+                for name, color in (("target_root_dot", (0.0, 1.0, 1.0)),
+                                    ("target_object_dot", (1.0, 0.0, 1.0))):
+                    self._pose_visualizers[name] = VisualizationMarkers(VisualizationMarkersCfg(
+                        prim_path=f"/World/Visuals/Command/{name}",
+                        markers={"dot": sim_utils.SphereCfg(
+                            radius=0.025,
+                            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+                        )},
+                    ))
 
-            for vis in (self.goal_anchor_vis, self.current_anchor_vis, self.goal_body_vis, self.current_body_vis):
-                vis.set_visibility(True)
-        else:
-            if hasattr(self, "goal_anchor_vis"):
-                for vis in (self.goal_anchor_vis, self.current_anchor_vis, self.goal_body_vis, self.current_body_vis):
-                    vis.set_visibility(False)
+        for vis in getattr(self, "_pose_visualizers", {}).values():
+            vis.set_visibility(debug_vis and self.cfg.goal_vis_env_ids != [])
 
     def _debug_vis_callback(self, event):
-        if not self.robot.is_initialized:
+        if not self.robot.is_initialized or not hasattr(self, "_goal_anchor_pos"):
             return
-        self.goal_anchor_vis.visualize(self.anchor_pos_w, self.anchor_quat_w)
-        self.current_anchor_vis.visualize(self.robot_anchor_pos_w, self.robot_anchor_quat_w)
-        bi = self.body_indices
-        self.goal_body_vis.visualize(
-            self.body_pos_w[:, bi].reshape(-1, 3),
-            self.body_quat_w[:, bi].reshape(-1, 4),
-        )
-        self.current_body_vis.visualize(
-            self.robot_body_pos_w[:, bi].reshape(-1, 3),
-            self.robot_body_quat_w[:, bi].reshape(-1, 4),
-        )
+        if self.cfg.goal_vis_env_ids == []:
+            return
+        ids = self._vis_env_ids
+
+        def draw(name, pos, quat):
+            vis = self._pose_visualizers.get(name)
+            if vis is not None:
+                vis.visualize(pos[ids].reshape(-1, 3), quat[ids].reshape(-1, 4))
+
+        draw("current_anchor", self.robot_anchor_pos_w, self.robot_anchor_quat_w)
+        if self.cfg.show_goal_poses:
+            # These are the same sampled goals used by observations, already in world coordinates.
+            draw("target_root", self.goal_anchor_pos_w, self.goal_anchor_quat_w)
+            draw("target_object", self.goal_obj_pos_w, self.goal_obj_quat_w)
+            draw("target_root_dot", self.goal_anchor_pos_w, self.goal_anchor_quat_w)
+            draw("target_object_dot", self.goal_obj_pos_w, self.goal_obj_quat_w)
+            draw("current_object", self.obj_pos_w, self.obj_quat_w)
+        if self.cfg.show_reference_bodies:
+            draw("reference_anchor", self.anchor_pos_w, self.anchor_quat_w)
+            bi = self.body_indices
+            draw("reference_bodies", self.body_pos_w[:, bi], self.body_quat_w[:, bi])
+            draw("current_bodies", self.robot_body_pos_w[:, bi], self.robot_body_quat_w[:, bi])
 
 
 # ----------------------------------------------------------------------- cfg
@@ -664,6 +690,15 @@ class MotionCommandCfg(CommandTermCfg):
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""
+
+    show_goal_poses: bool = False
+    """Show sampled goal root/object frames and the actual object frame when debug_vis is enabled."""
+
+    show_reference_bodies: bool = True
+    """Show timeline reference anchor/bodies and actual bodies when debug_vis is enabled."""
+
+    goal_vis_env_ids: list[int] | None = None
+    """Environment subset for all command markers; None shows all, [] hides all. Does not affect evaluation."""
 
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/World/Visuals/Command/anchor")
     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)

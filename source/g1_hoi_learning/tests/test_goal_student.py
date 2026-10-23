@@ -86,6 +86,42 @@ def command():
     return cmd
 
 
+def test_goal_visualization_uses_sampled_world_goals_and_filters_envs(command):
+    command.cfg.show_goal_poses = True
+    command.cfg.show_reference_bodies = False
+    command.cfg.goal_vis_env_ids = [2]
+    command._vis_env_ids = torch.tensor([2])
+    command.robot.is_initialized = True
+    command.object.data = SimpleNamespace(
+        root_pos_w=torch.zeros(3, 3),
+        root_quat_w=command.robot.data.body_quat_w[:, 0],
+    )
+    drawn = {}
+
+    def recorder(name):
+        return SimpleNamespace(visualize=lambda pos, quat: drawn.update({name: (pos.clone(), quat.clone())}))
+
+    names = ("target_root", "target_object", "target_root_dot", "target_object_dot",
+             "current_anchor", "current_object")
+    command._pose_visualizers = {name: recorder(name) for name in names}
+    command._debug_vis_callback(None)
+    torch.testing.assert_close(drawn["target_root"][0], command.goal_anchor_pos_w[[2]])
+    torch.testing.assert_close(drawn["target_object"][0], command.goal_obj_pos_w[[2]])
+    torch.testing.assert_close(drawn["target_object"][1], command.goal_obj_quat_w[[2]])
+    assert not torch.equal(drawn["target_root"][0], command.anchor_pos_w[[2]])
+
+    # A new sampled frame must replace both displayed targets, without adding origins twice.
+    command.goal_time_steps[2] = 4
+    command._refresh_goal([2])
+    command._debug_vis_callback(None)
+    torch.testing.assert_close(drawn["target_root"][0], command.goal_anchor_pos_w[[2]])
+    torch.testing.assert_close(drawn["target_object"][0], command.goal_obj_pos_w[[2]])
+    drawn.clear()
+    command.cfg.goal_vis_env_ids = []
+    command._debug_vis_callback(None)
+    assert not drawn
+
+
 def test_terminal_goal_ignores_rsi_and_does_not_alias_motion(command):
     torch.testing.assert_close(command.goal_joint_pos[:, 0], torch.tensor([0.03, 0.12, 0.09]))
     before = command.goal_obj_pos_w.clone()

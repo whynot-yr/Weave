@@ -1,0 +1,19 @@
+# @package _global_
+# Evaluate all clips while visualizing sampled goals in environment 0.
+defaults:
+  - train
+  - _self_
+
+env:
+  commands:
+    motion:
+      eval_mode: true
+      rsi: false
+      debug_vis: true
+      show_goal_poses: true
+      show_reference_bodies: false
+      goal_vis_env_ids: [0]
+
+agent:
+  policy:
+    compile: false
