@@ -110,7 +110,7 @@ class DepthEventsCfg(EventCfg):
 
 @configclass
 class G1HoiDepthEnvCfg(G1HoiLearningEnvCfg):
-    scene: DepthSceneCfg = DepthSceneCfg(num_envs=4096, env_spacing=4.0)
+    scene: DepthSceneCfg = DepthSceneCfg(num_envs=4096, env_spacing=10.0)
     observations: DepthObservationsCfg = DepthObservationsCfg()
     events: DepthEventsCfg = DepthEventsCfg()
 

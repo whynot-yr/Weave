@@ -37,6 +37,7 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.GroundPlaneCfg(
             usd_path=GROUND_PLANE_USD_PATH,
             size=(100.0, 100.0),
+            color=(0.8, 0.8, 0.8),
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 static_friction=1.0,
                 dynamic_friction=1.0,
@@ -49,9 +50,105 @@ class G1HoiLearningSceneCfg(InteractiveSceneCfg):
 
     object: RigidObjectCfg = MISSING   # set in G1HoiLearningEnvCfg.__post_init__ from motion_file's object_name
 
+    # Visual-only background curtains.
+    # Enclose a 9 m x 9 m area, with 3 m tall curtains resting on the ground.
+    # Coordinates are relative to each parallel environment origin.
+    curtain_left = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CurtainLeft",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.0, -4.5, 1.5),
+            rot=(0.7071068, 0.0, 0.0, -0.7071068),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.02, 9.0, 3.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=False,
+            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.12, 0.12, 0.12),
+                roughness=0.8,
+            ),
+        ),
+    )
+
+    curtain_back = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CurtainBack",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(-4.5, 0.0, 1.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.02, 9.0, 3.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=False,
+            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.12, 0.12, 0.12),
+                roughness=0.8,
+            ),
+        ),
+    )
+
+    curtain_right = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CurtainRight",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.0, 4.5, 1.5),
+            rot=(0.7071068, 0.0, 0.0, -0.7071068),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.02, 9.0, 3.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=False,
+            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.12, 0.12, 0.12),
+                roughness=0.8,
+            ),
+        ),
+    )
+
+    curtain_front = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/CurtainFront",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(4.5, 0.0, 1.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(0.02, 9.0, 3.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=True,
+            ),
+            collision_props=sim_utils.CollisionPropertiesCfg(
+                collision_enabled=False,
+            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.12, 0.12, 0.12),
+                roughness=0.8,
+            ),
+        ),
+    )
+
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
-        spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
+        spawn=sim_utils.DomeLightCfg(
+            color=(1.0, 1.0, 1.0),
+            intensity=800.0,
+            enable_color_temperature=True,
+            color_temperature=3000.0,
+        ),
     )
 
     contact_sensor = ContactSensorCfg(
@@ -340,6 +437,29 @@ class EventCfg:
       },
   )
 
+    randomize_light_startup = EventTerm(
+        func=mdp.randomize_dome_light,
+        mode="startup",
+        params={
+            "light_path": "/World/DomeLight",
+            "intensity_range": (400.0, 1200.0),
+            "color_temperature_range": (2500.0, 6500.0),
+        },
+    )
+
+    randomize_light_interval = EventTerm(
+        func=mdp.randomize_dome_light,
+        mode="interval",
+        interval_range_s=(4.0, 4.0),
+        is_global_time=True,
+        params={
+            "light_path": "/World/DomeLight",
+            "intensity_range": (400.0, 1200.0),
+            "color_temperature_range": (2500.0, 6500.0),
+        },
+    )
+
+
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
@@ -479,7 +599,7 @@ class TerminationsCfg:
 class G1HoiLearningEnvCfg(ManagerBasedRLEnvCfg):
     """G1 HOI learning environment config."""
 
-    scene: G1HoiLearningSceneCfg = G1HoiLearningSceneCfg(num_envs=4096, env_spacing=4.0)
+    scene: G1HoiLearningSceneCfg = G1HoiLearningSceneCfg(num_envs=4096, env_spacing=10.0)
     commands: CommandsCfg = CommandsCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
