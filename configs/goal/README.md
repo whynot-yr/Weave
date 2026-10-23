@@ -71,3 +71,15 @@ Set `env.commands.motion.debug_vis=false` for evaluation without markers, and
 use `--headless` when no interactive viewer is needed. Evaluation exits once all
 clips finish. Environments may reset after finishing; the evaluator scores only
 their first episode, while markers continue showing their current goals.
+
+Add `--video` to record the viewer camera, including visible goal markers, walls,
+and lighting. Videos are saved to `<output_dir>/videos/eval.mp4`, alongside
+`metrics.json`; without `--output_dir`, the directory is `<checkpoint_dir>/eval`.
+An existing `eval.mp4` is overwritten. Recording starts after the evaluation
+reset and captures one frame per control step (50 FPS with the default settings).
+`--video_length 0` (default) records until evaluation ends; a positive value caps
+the number of recorded steps without shortening evaluation. Frames already
+captured are also saved on interruption. `--headless --video` enables camera
+rendering automatically; `--real-time` is optional and does not change video FPS.
+With `--num_envs 1`, only clip 0 is evaluated and recorded. Camera placement and
+resolution follow `env.viewer`.

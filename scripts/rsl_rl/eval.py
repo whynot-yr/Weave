@@ -30,13 +30,22 @@ parser.add_argument(
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
-parser.add_argument("--output_dir", type=str, default=None, help="Where to write metrics.json. Defaults to <run>/eval.")
+parser.add_argument("--output_dir", type=str, default=None, help="Where to write metrics.json and videos. Defaults to <run>/eval.")
+parser.add_argument("--video", action="store_true", default=False, help="Record the viewer camera to <output_dir>/videos/eval.mp4.")
+parser.add_argument(
+    "--video_length", type=int, default=0,
+    help="Maximum number of evaluation steps to record; 0 records until evaluation ends. Does not limit evaluation.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.video_length < 0:
+    parser.error("--video_length must be non-negative")
+if args_cli.video:
+    args_cli.enable_cameras = True
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -210,66 +219,94 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.dirname(resume_path)
     env_cfg.log_dir = log_dir
 
-    env = gym.make(args_cli.task, cfg=env_cfg)
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
-    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    else:
-        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
-    runner.load(resume_path)
-    policy = runner.get_inference_policy(device=env.unwrapped.device)
-    policy_nn = runner.alg.policy if hasattr(runner.alg, "policy") else runner.alg.actor_critic
-
-    dt = env.unwrapped.step_dt
-    obs, _ = env.reset()
-    policy_nn.reset()
-    evaluator = ClipEvaluator(env, read_motion_clip_names(env_cfg.commands.motion.motion_files))
-
-    pbar = tqdm(range(evaluator.max_steps), desc="eval", unit="step", dynamic_ncols=True)
-    for _ in pbar:
-        if not simulation_app.is_running():
-            print("[WARN] Simulation app closed before every clip finished; results are partial.")
-            break
-        start_time = time.time()
-        with torch.inference_mode():
-            evaluator.collect()
-            actions = policy(obs)
-            obs, _, dones, extras = env.step(actions)
-            policy_nn.reset(dones)
-            evaluator.update(dones, extras["time_outs"])
-        n_done, n_ok = int(evaluator.finished.sum()), int(evaluator.success.sum())
-        pbar.set_postfix_str(f"done {n_done}/{env.num_envs} | ok {n_ok} | succ {n_ok / max(n_done, 1)*100:.2f}%")
-        if evaluator.done:
-            break
-        sleep_time = dt - (time.time() - start_time)
-        if args_cli.real_time and sleep_time > 0:
-            time.sleep(sleep_time)
-    pbar.close()
-
-    if not evaluator.done:
-        print(f"[WARN] {int((~evaluator.finished).sum())} env(s) never terminated; scored on what they ran.")
-
-    res = evaluator.results()
-    print_report(res)
-
     output_dir = args_cli.output_dir or os.path.join(log_dir, "eval")
     os.makedirs(output_dir, exist_ok=True)
-    out_file = os.path.join(output_dir, "metrics.json")
-    res["checkpoint"] = resume_path
-    res["motion_files"] = list(env_cfg.commands.motion.motion_files)
-    with open(out_file, "w") as f:
-        json.dump(res, f, indent=2)
-    print(f"[INFO] Wrote {out_file}")
+    video_env = None
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    try:
+        if isinstance(env.unwrapped, DirectMARLEnv):
+            env = multi_agent_to_single_agent(env)
+        if args_cli.video:
+            video_env = gym.wrappers.RecordVideo(
+                env,
+                video_folder=os.path.join(output_dir, "videos"),
+                episode_trigger=lambda _: False,
+                video_length=0,
+                fps=round(1 / env.unwrapped.step_dt),
+                disable_logger=True,
+            )
+            env = video_env
+        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    env.close()
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+        if agent_cfg.class_name == "OnPolicyRunner":
+            runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        elif agent_cfg.class_name == "DistillationRunner":
+            runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        else:
+            raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+        runner.load(resume_path)
+        policy = runner.get_inference_policy(device=env.unwrapped.device)
+        policy_nn = runner.alg.policy if hasattr(runner.alg, "policy") else runner.alg.actor_critic
 
+        dt = env.unwrapped.step_dt
+        obs, _ = env.reset()
+        policy_nn.reset()
+        evaluator = ClipEvaluator(env, read_motion_clip_names(env_cfg.commands.motion.motion_files))
+
+        if video_env is not None:
+            # Both RSL-RL construction and the explicit evaluation reset are now complete.
+            video_env.start_recording("eval")
+            print(f"[INFO] Recording video to {os.path.join(output_dir, 'videos', 'eval.mp4')}")
+
+        pbar = tqdm(range(evaluator.max_steps), desc="eval", unit="step", dynamic_ncols=True)
+        for step in pbar:
+            if not simulation_app.is_running():
+                print("[WARN] Simulation app closed before every clip finished; results are partial.")
+                break
+            start_time = time.time()
+            with torch.inference_mode():
+                evaluator.collect()
+                actions = policy(obs)
+                obs, _, dones, extras = env.step(actions)
+                policy_nn.reset(dones)
+                evaluator.update(dones, extras["time_outs"])
+            if (
+                video_env is not None and video_env.recording
+                and args_cli.video_length > 0 and step + 1 >= args_cli.video_length
+            ):
+                video_env.stop_recording()
+            n_done, n_ok = int(evaluator.finished.sum()), int(evaluator.success.sum())
+            pbar.set_postfix_str(f"done {n_done}/{env.num_envs} | ok {n_ok} | succ {n_ok / max(n_done, 1)*100:.2f}%")
+            if evaluator.done:
+                break
+            sleep_time = dt - (time.time() - start_time)
+            if args_cli.real_time and sleep_time > 0:
+                time.sleep(sleep_time)
+        pbar.close()
+
+        if not evaluator.done:
+            print(f"[WARN] {int((~evaluator.finished).sum())} env(s) never terminated; scored on what they ran.")
+
+        res = evaluator.results()
+        print_report(res)
+
+        out_file = os.path.join(output_dir, "metrics.json")
+        res["checkpoint"] = resume_path
+        res["motion_files"] = list(env_cfg.commands.motion.motion_files)
+        with open(out_file, "w") as f:
+            json.dump(res, f, indent=2)
+        print(f"[INFO] Wrote {out_file}")
+    finally:
+        # Flush video even on interruption, and release the environment if encoding fails.
+        try:
+            if video_env is not None and video_env.recording:
+                video_env.stop_recording()
+        finally:
+            env.close()
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    try:
+        main()
+    finally:
+        simulation_app.close()
