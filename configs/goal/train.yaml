@@ -11,7 +11,7 @@ env:
   commands:
     motion:
       motion_files:
-        - ./data/test/floorlamp_033_var5.npz
+        - ./data/test/floorlamp_33clip_var5.npz
       rsi: true
 
 agent:
