@@ -108,6 +108,8 @@ class ClipEvaluator:
         n = self.env.num_envs
         self.clip_ids = self.command.env_clip.clone()
         self.clip_len = self.command.motion.clip_lengths[self.clip_ids].clone()
+        self.start_frames = self.command.time_steps.clone()
+        self.remaining_frames = self.clip_len - self.start_frames
         self.clip_names = [clip_names[int(i)] for i in self.clip_ids]
 
         self.finished = torch.zeros(n, dtype=torch.bool, device=self.device)
@@ -118,7 +120,7 @@ class ClipEvaluator:
 
     @property
     def max_steps(self) -> int:
-        return int(self.clip_len.max().item()) + 5
+        return int(self.remaining_frames.max().item()) + 5
 
     def collect(self) -> None:
         self.command._update_metrics()
@@ -133,6 +135,9 @@ class ClipEvaluator:
             return
         terminated = dones.bool() & ~time_outs
         flags = {n: self.term_mgr.get_term(n) for n in self.term_names}
+        # Failures can coincide with clip_end/time_out; timeout does not cancel failure.
+        for name in self.fail_names:
+            terminated |= flags[name].bool()
         self.success |= newly & flags["clip_end"] & ~terminated
         for i in newly.nonzero(as_tuple=False).flatten().tolist():
             if terminated[i]:
@@ -148,7 +153,9 @@ class ClipEvaluator:
     def results(self) -> dict:
         steps = self.steps.clamp(min=1)
         per_clip = {k: (v / steps).cpu().tolist() for k, v in self.sums.items()}
-        progress = (self.steps.float() / self.clip_len.clamp(min=1).float()).clamp(max=1.0)
+        # Terminations run before command advancement, so the terminal reference
+        # frame contributes one final control step: L - start, not L - 1 - start.
+        progress = (self.steps.float() / self.remaining_frames.clamp(min=1).float()).clamp(max=1.0)
         success = self.success.cpu()
 
         def agg(mask: torch.Tensor) -> dict[str, float]:
@@ -171,6 +178,8 @@ class ClipEvaluator:
                     "clip_id": int(self.clip_ids[i]),
                     "name": self.clip_names[i],
                     "length": int(self.clip_len[i]),
+                    "start_frame": int(self.start_frames[i]),
+                    "remaining_length": int(self.remaining_frames[i]),
                     "steps": int(self.steps[i]),
                     "progress": float(progress[i]),
                     "success": bool(success[i]),
@@ -294,6 +303,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         out_file = os.path.join(output_dir, "metrics.json")
         res["checkpoint"] = resume_path
         res["motion_files"] = list(env_cfg.commands.motion.motion_files)
+        res["eval_start_mode"] = env_cfg.commands.motion.eval_start_mode
+        res["seed"] = env_cfg.seed
         with open(out_file, "w") as f:
             json.dump(res, f, indent=2)
         print(f"[INFO] Wrote {out_file}")

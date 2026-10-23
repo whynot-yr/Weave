@@ -183,6 +183,8 @@ class MotionCommand(CommandTerm):
     def __init__(self, cfg: "MotionCommandCfg", env: ManagerBasedRLEnv):
         if cfg.goal_sampling_mode not in ("terminal", "random_future"):
             raise ValueError(f"Invalid goal_sampling_mode: {cfg.goal_sampling_mode}")
+        if cfg.eval_start_mode not in ("zero", "random"):
+            raise ValueError(f"Invalid eval_start_mode: {cfg.eval_start_mode}")
 
         # Set up robot references before super().__init__ because it calls _set_debug_vis_impl
         self.robot: Articulation = env.scene[cfg.asset_name]
@@ -517,7 +519,14 @@ class MotionCommand(CommandTerm):
         # 1. pick a clip and starting frame within each environment's fixed object
         if self.cfg.eval_mode:
             self.env_clip[env_ids] = self._eval_env_clip[env_ids]
-            self.time_steps[env_ids] = 0
+            if self.cfg.eval_start_mode == "random":
+                lengths = self.motion.clip_lengths[self.env_clip[env_ids]]
+                # Exclude the terminal frame so a strictly future goal exists.
+                # Single-frame clips retain their only frame as both start and goal.
+                counts = (lengths - 1).clamp(min=1)
+                self.time_steps[env_ids] = (torch.rand(len(env_ids), device=self.device) * counts).long()
+            else:
+                self.time_steps[env_ids] = 0
         elif self.cfg.rsi:
             n = len(env_ids)
             self.env_clip[env_ids] = self.motion.sample_clip(objects)
@@ -683,10 +692,13 @@ class MotionCommandCfg(CommandTermCfg):
     """terminal: fixed final frame; random_future: resample future goals when reference time reaches them."""
 
     rsi: bool = True
-    """Random State Initialization: start from random frame (training) or frame 0 (evaluation)."""
+    """Random State Initialization during training; evaluation uses eval_start_mode."""
 
     eval_mode: bool = False
     """Clip-wise evaluation. Requires a single-object motion set."""
+
+    eval_start_mode: str = "zero"
+    """Evaluation start: zero or uniformly random non-terminal frame (frame 0 for single-frame clips)."""
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""

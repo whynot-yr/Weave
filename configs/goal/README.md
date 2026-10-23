@@ -61,6 +61,50 @@ All clips are evaluated, while `goal_vis_env_ids: [0]` limits command markers to
 environment 0. Use `null` for all environments or another list of environment IDs.
 This filter does not change the evaluated clips or the viewer camera.
 
+## Evaluate from random reference states
+
+Use `eval_random` to evaluate each clip from an independently sampled reference
+frame instead of frame 0:
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+/data/g1_hoi_ws/sim51/bin/python scripts/rsl_rl/eval.py \
+  --task G1-Inspire-HOI-Goal-v0 \
+  --config-dir ./configs/goal --config-name eval_random \
+  --checkpoint /absolute/path/to/student/model_XXXX.pt \
+  --seed 42 --output_dir outputs/eval_random_seed42 --real-time
+```
+
+For a clip with frames `0, ..., T`, the start `t` is sampled uniformly from
+`[0, T-1]`, excluding the terminal frame so a strictly future goal exists.
+Robot root and object poses and velocities, and joint positions and velocities,
+are restored from reference frame `t` (joint positions retain the existing limit
+clamping). The first goal is sampled uniformly from `[t+1, T]`. When reference
+time reaches goal frame `m < T`, a new goal is sampled from `[m+1, T]`; the final
+goal is held until termination. Switching goals does not reset simulation state
+and does not wait for the actual robot to reach the target. A single-frame clip
+uses frame 0 for both start and goal.
+
+The existing `eval` config keeps `eval_start_mode: zero`. You can also select
+random starts with `env.commands.motion.eval_start_mode=random` on an existing
+evaluation command. This setting only affects evaluation; training still uses
+`rsi`. `eval_random` explicitly selects `goal_sampling_mode: random_future`.
+
+Each environment scores only its first episode. `metrics.json` records the seed
+and start mode, plus each clip's `start_frame`, original `length`, and
+`remaining_length`. Progress is measured against the remaining episode, so
+running from a random start to the clip end yields 100%. With the current
+termination-before-command-update order, the terminal reference frame contributes
+one final control step: a clip of length `L` starting at `t` has `L-t` remaining
+steps. Error averages cover only the evaluated suffix; aggregate errors retain
+the existing step weighting. Success requires reaching the clip end without any
+failure condition, including failures coinciding with clip end. Fixed seeds are
+reproducible under the same execution conditions; use multiple seeds to compare
+performance across starting states. These suffix evaluations measure a different
+task from completing entire clips from frame 0.
+
+## Goal markers and recording
+
 Large XYZ frames show the sampled root (pelvis) and object goals. A cyan dot marks
 the root goal and a magenta dot marks the object goal; small frames show actual
 root/object poses. They read the same world-space targets used by observations,

@@ -64,7 +64,7 @@ def command():
     cmd.env_object, cmd.env_clip = torch.zeros(3, dtype=torch.long), torch.tensor([0, 2, 1])
     cmd.time_steps, cmd.future_offsets = torch.tensor([1, 0, 3]), torch.tensor([0, 2])
     cmd.goal_time_steps = torch.zeros(3, dtype=torch.long)
-    cmd.cfg = SimpleNamespace(eval_mode=False, rsi=True, goal_sampling_mode="terminal")
+    cmd.cfg = SimpleNamespace(eval_mode=False, eval_start_mode="zero", rsi=True, goal_sampling_mode="terminal")
     origins = torch.tensor([[100.0, 0, 0], [0, 100.0, 0], [0, 0, 100.0]])
     cmd._env = SimpleNamespace(scene=SimpleNamespace(env_origins=origins))
     actual = SimpleNamespace(
@@ -156,6 +156,126 @@ def test_eval_reset_preserves_frame_zero_reference(command):
     assert command.time_steps.tolist() == [0, 0, 0]
     torch.testing.assert_close(command.joint_pos[:, 0], torch.tensor([0.04, 0.0, 0.10]))
     torch.testing.assert_close(command.goal_joint_pos[:, 0], torch.tensor([0.09, 0.03, 0.12]))
+
+
+@pytest.mark.parametrize("draw, expected", [(0.0, [0, 0, 0]), (0.5, [2, 1, 1]), (0.999999, [4, 2, 1])])
+@pytest.mark.parametrize("rsi", [False, True])
+def test_random_eval_start_and_goal_bounds(command, monkeypatch, draw, expected, rsi):
+    command.cfg.eval_mode = True
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command.cfg.rsi = rsi
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.full((n,), draw, device=device))
+
+    command._resample_command(torch.arange(3))
+
+    assert command.env_clip.tolist() == [1, 0, 2]
+    assert command.time_steps.tolist() == expected
+    assert (command.goal_time_steps > command.time_steps).all()
+    assert (command.goal_time_steps < command.motion.clip_lengths[command.env_clip]).all()
+    torch.testing.assert_close(command.joint_pos, command.motion.frames(command.env_clip, command.time_steps).joint_pos)
+    assert_goal_matches_selected_frame(command)
+
+
+def test_random_eval_restores_full_reference_state(command, monkeypatch):
+    command.cfg.eval_mode = True
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    buffer = command.motion.buffer
+    frame = torch.arange(13).float()
+    angle = frame / 13
+    quat = torch.stack((angle.cos(), angle.sin(), frame * 0, frame * 0), dim=-1)
+    buffer.body_quat_w[:] = quat[:, None, :]
+    buffer.object_quat_w[:] = quat
+    buffer.joint_vel[:] = frame[:, None] + 1
+    buffer.body_lin_vel_w[:] = frame[:, None, None] + 2
+    buffer.body_ang_vel_w[:] = frame[:, None, None] + 3
+    buffer.object_lin_vel_w[:] = frame[:, None] + 4
+    buffer.object_ang_vel_w[:] = frame[:, None] + 5
+    writes = {}
+
+    def capture(name):
+        def write(*values, env_ids):
+            writes[name] = tuple(value.clone() for value in values)
+            torch.testing.assert_close(env_ids, torch.arange(3))
+        return write
+
+    monkeypatch.setattr(command.robot, "write_root_state_to_sim", capture("root"))
+    monkeypatch.setattr(command.robot, "write_joint_state_to_sim", capture("joints"))
+    monkeypatch.setattr(command.object, "write_root_state_to_sim", capture("object"))
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.full((n,), 0.5, device=device))
+
+    command._resample_command(torch.arange(3))
+
+    reference = command.motion.frames(command.env_clip, command.time_steps)
+    origins = command._env.scene.env_origins
+    torch.testing.assert_close(writes["root"][0], torch.cat((
+        reference.body_pos_w[:, 0] + origins, reference.body_quat_w[:, 0],
+        reference.body_lin_vel_w[:, 0], reference.body_ang_vel_w[:, 0],
+    ), dim=-1))
+    torch.testing.assert_close(writes["joints"][0], reference.joint_pos)
+    torch.testing.assert_close(writes["joints"][1], reference.joint_vel)
+    torch.testing.assert_close(writes["object"][0], torch.cat((
+        reference.object_pos_w + origins, reference.object_quat_w,
+        reference.object_lin_vel_w, reference.object_ang_vel_w,
+    ), dim=-1))
+    torch.testing.assert_close(command.joint_pos, reference.joint_pos)
+    assert_goal_matches_selected_frame(command)
+
+
+def test_random_eval_partial_reset_preserves_other_envs(command, monkeypatch):
+    command.cfg.eval_mode = True
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    before = (command.env_clip.clone(), command.time_steps.clone(),
+              command.goal_time_steps.clone(), command.goal_joint_pos.clone())
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.full((n,), 0.5, device=device))
+
+    command._resample_command([0])
+
+    assert command.env_clip[0] == 1
+    assert command.time_steps[0] == 2
+    assert command.goal_time_steps[0] == 4
+    after = (command.env_clip, command.time_steps, command.goal_time_steps, command.goal_joint_pos)
+    for old, new in zip(before, after):
+        torch.testing.assert_close(new[1:], old[1:])
+
+
+def test_random_eval_single_frame_clip(command):
+    command.cfg.eval_mode = True
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command.motion.clip_lengths[0] = 1
+    command._eval_env_clip = torch.zeros(3, dtype=torch.long)
+
+    command._resample_command(torch.arange(3))
+
+    assert command.time_steps.tolist() == [0, 0, 0]
+    assert command.goal_time_steps.tolist() == [0, 0, 0]
+    assert_goal_matches_selected_frame(command)
+
+
+def test_random_eval_reset_reproducible_with_fixed_seed(command):
+    command.cfg.eval_mode = True
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    draws = []
+    with torch.random.fork_rng(devices=[]):
+        for _ in range(2):
+            torch.manual_seed(42)
+            command._resample_command(torch.arange(3))
+            draws.append((command.time_steps.clone(), command.goal_time_steps.clone()))
+    torch.testing.assert_close(draws[0], draws[1])
+
+
+def test_invalid_eval_start_mode_rejected(command):
+    cfg = SimpleNamespace(goal_sampling_mode="random_future", eval_start_mode="invalid")
+    with pytest.raises(ValueError, match="Invalid eval_start_mode"):
+        type(command)(cfg, None)
 
 
 def assert_goal_matches_selected_frame(command):

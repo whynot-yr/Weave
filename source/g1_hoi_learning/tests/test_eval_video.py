@@ -99,7 +99,8 @@ def test_eval_video_lifecycle(tmp_path, video, limit, interrupt, expected_frames
         video_length=limit, real_time=False,
     )
     env_cfg = SimpleNamespace(
-        sim=SimpleNamespace(device="cpu"), commands=SimpleNamespace(motion=SimpleNamespace(motion_files=[])),
+        sim=SimpleNamespace(device="cpu"),
+        commands=SimpleNamespace(motion=SimpleNamespace(motion_files=[], eval_start_mode="zero")),
         terminations=SimpleNamespace(), scene=SimpleNamespace(),
     )
     agent_cfg = SimpleNamespace(
@@ -126,7 +127,10 @@ def test_eval_video_lifecycle(tmp_path, video, limit, interrupt, expected_frames
             ns["main"](env_cfg, agent_cfg)
     else:
         ns["main"](env_cfg, agent_cfg)
-        assert json.loads((tmp_path / "eval/metrics.json").read_text())["steps"] == 3
+        result = json.loads((tmp_path / "eval/metrics.json").read_text())
+        assert result["steps"] == 3
+        assert result["eval_start_mode"] == "zero"
+        assert result["seed"] == 0
     assert raw.closed
     assert raw.renders == expected_frames
     video_path = tmp_path / "eval/videos/eval.mp4"

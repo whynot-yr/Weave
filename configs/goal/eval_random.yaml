@@ -1,0 +1,11 @@
+# @package _global_
+# Evaluate each clip from an independently sampled non-terminal reference frame.
+defaults:
+  - eval
+  - _self_
+
+env:
+  commands:
+    motion:
+      eval_start_mode: random
+      goal_sampling_mode: random_future

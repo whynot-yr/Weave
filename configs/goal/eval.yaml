@@ -8,6 +8,7 @@ env:
   commands:
     motion:
       eval_mode: true
+      eval_start_mode: zero
       rsi: false
       debug_vis: true
       show_goal_poses: true
