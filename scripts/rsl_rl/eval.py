@@ -78,7 +78,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import g1_hoi_learning.tasks  # noqa: F401
 from g1_hoi_learning.tasks.hoi.mdp.commands import MotionCommand
-from g1_hoi_learning.tasks.hoi.mdp.terminations import motion_clip_end
+from g1_hoi_learning.tasks.hoi.mdp.terminations import goal_success, motion_clip_end, robot_fallen
 
 
 def read_motion_num_clips(motion_files: list[str]) -> int:
@@ -100,36 +100,63 @@ class ClipEvaluator:
         self.term_mgr = self.env.termination_manager
         self.term_names = list(self.term_mgr.active_terms)
         self.fail_names = [n for n in self.term_names if not self.term_mgr.get_term_cfg(n).time_out]
-        if "clip_end" not in self.term_names:
+        self.task_mode = self.command.cfg.eval_success_mode == "goal_success"
+        self.success_term = "goal_success" if self.task_mode else "clip_end"
+        self.goal_term = self.term_mgr.get_term_cfg("goal_success").func if self.task_mode else None
+        self.task_records = [{} for _ in range(self.env.num_envs)]
+        if self.success_term not in self.term_names:
             raise ValueError("clip-wise eval needs the 'clip_end' termination term; it is not active.")
 
         self.metric_keys = list(self.command.metrics)
 
         n = self.env.num_envs
+        self.init_clip_ids = self.command.init_clip_ids.clone()
+        self.init_frames = self.command.init_time_steps.clone()
+        self.init_clip_names = [clip_names[int(i)] for i in self.init_clip_ids]
         self.clip_ids = self.command.env_clip.clone()
         self.clip_len = self.command.motion.clip_lengths[self.clip_ids].clone()
         self.start_frames = self.command.time_steps.clone()
+        self.first_goal_frames = self.command.first_goal_time_steps.clone()
         self.remaining_frames = self.clip_len - self.start_frames
         self.clip_names = [clip_names[int(i)] for i in self.clip_ids]
 
         self.finished = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.success = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.steps = torch.zeros(n, dtype=torch.long, device=self.device)
+        self.metric_steps = torch.zeros_like(self.steps)
         self.cause = [""] * n
         self.sums = {k: torch.zeros(n, device=self.device) for k in self.metric_keys}
 
     @property
     def max_steps(self) -> int:
+        if self.task_mode:
+            return self.env.max_episode_length + 1
         return int(self.remaining_frames.max().item()) + 5
 
     def collect(self) -> None:
         self.command._update_metrics()
-        active = (~self.finished).float()
+        running = ~self.finished
+        measured = running
         for k in self.metric_keys:
-            self.sums[k] += self.command.metrics[k] * active
-        self.steps += ~self.finished
+            self.sums[k][measured] += self.command.metrics[k][measured]
+        self.steps += running
+        self.metric_steps += measured
 
     def update(self, dones: torch.Tensor, time_outs: torch.Tensor) -> None:
+        if self.task_mode:
+            values = {k: v.tolist() for k, v in self.goal_term.snapshot.items()}
+            done_values = dones.tolist()
+            for i in (~self.finished).nonzero(as_tuple=False).flatten().tolist():
+                record = {k: v[i] for k, v in values.items()}
+                history = self.goal_term.snapshot_history[i]
+                record["goal_history"] = history
+                record["goals_reached"] = len(history)
+                # A reached intermediate goal produces a new target only if this episode continues.
+                pending = not record["final_goal_reached"] and not (
+                    done_values[i] and record.get("current_goal_reached", False)
+                )
+                record["goals_sampled"] = len(history) + int(pending)
+                self.task_records[i] = record
         newly = dones.bool() & ~self.finished
         if not newly.any():
             return
@@ -138,12 +165,12 @@ class ClipEvaluator:
         # Failures can coincide with clip_end/time_out; timeout does not cancel failure.
         for name in self.fail_names:
             terminated |= flags[name].bool()
-        self.success |= newly & flags["clip_end"] & ~terminated
+        self.success |= newly & flags[self.success_term] & ~terminated
         for i in newly.nonzero(as_tuple=False).flatten().tolist():
             if terminated[i]:
                 self.cause[i] = next((n for n in self.fail_names if flags[n][i]), "unknown")
             else:
-                self.cause[i] = "clip_end" if flags["clip_end"][i] else "time_out"
+                self.cause[i] = self.success_term if flags[self.success_term][i] else "time_out"
         self.finished |= newly
 
     @property
@@ -151,20 +178,23 @@ class ClipEvaluator:
         return bool(self.finished.all())
 
     def results(self) -> dict:
-        steps = self.steps.clamp(min=1)
-        per_clip = {k: (v / steps).cpu().tolist() for k, v in self.sums.items()}
+        measured_steps = self.metric_steps.clamp(min=1)
+        per_clip = {
+            k: torch.where(self.metric_steps > 0, v / measured_steps, float("nan")).cpu().tolist()
+            for k, v in self.sums.items()
+        }
         # Terminations run before command advancement, so the terminal reference
         # frame contributes one final control step: L - start, not L - 1 - start.
         progress = (self.steps.float() / self.remaining_frames.clamp(min=1).float()).clamp(max=1.0)
         success = self.success.cpu()
 
         def agg(mask: torch.Tensor) -> dict[str, float]:
-            if not mask.any():
+            frames = self.metric_steps[mask].sum().float()
+            if frames == 0:
                 return {k: float("nan") for k in self.metric_keys}
-            frames = self.steps[mask].sum().float()
             return {k: float(self.sums[k][mask].sum() / frames) for k in self.metric_keys}
 
-        return {
+        result = {
             "num_clips": int(self.env.num_envs),
             "success_rate": float(success.float().mean()),
             "progress_rate": float(progress.mean()),
@@ -179,16 +209,39 @@ class ClipEvaluator:
                     "name": self.clip_names[i],
                     "length": int(self.clip_len[i]),
                     "start_frame": int(self.start_frames[i]),
+                    "init_clip_id": int(self.init_clip_ids[i]),
+                    "init_clip_name": self.init_clip_names[i],
+                    "init_frame": int(self.init_frames[i]),
+                    "reference_clip_id": int(self.clip_ids[i]),
+                    "reference_clip_name": self.clip_names[i],
+                    "reference_start_frame": int(self.start_frames[i]),
+                    "reference_length": int(self.clip_len[i]),
                     "remaining_length": int(self.remaining_frames[i]),
+                    "first_goal_frame": int(self.first_goal_frames[i]),
                     "steps": int(self.steps[i]),
+                    "metric_steps": int(self.metric_steps[i]),
                     "progress": float(progress[i]),
                     "success": bool(success[i]),
                     "cause": self.cause[i],
                     **{k: per_clip[k][i] for k in self.metric_keys},
+                    **self.task_records[i],
                 }
                 for i in range(self.env.num_envs)
             ],
         }
+
+        result["eval_success_mode"] = self.command.cfg.eval_success_mode
+        if self.task_mode:
+            result.pop("progress_rate")
+            for row in result["clips"]:
+                row.pop("progress")
+            result["failures"] = {
+                name: self.cause.count(name) for name in [*self.fail_names, "time_out"] if self.cause.count(name)
+            }
+            sampled = sum(r.get("goals_sampled", 0) for r in self.task_records)
+            reached = sum(r.get("goals_reached", 0) for r in self.task_records)
+            result["goal_reach_rate"] = reached / sampled if sampled else 0.0
+        return result
 
 
 def print_report(res: dict) -> None:
@@ -198,7 +251,10 @@ def print_report(res: dict) -> None:
     n_ok = sum(c["success"] for c in res["clips"])
     print(f"\n===== CLIP-WISE EVALUATION  ({res['num_clips']} clips) =====")
     print(f"success_rate : {res['success_rate']:.4f}  ({n_ok}/{res['num_clips']})")
-    print(f"progress_rate: {res['progress_rate']:.4f}")
+    if "progress_rate" in res:
+        print(f"progress_rate: {res['progress_rate']:.4f}")
+    if "goal_reach_rate" in res:
+        print(f"goal_reach_rate: {res['goal_reach_rate']:.4f}")
     print(f"{'metric':<{width}}  {'all':>10}  {'success':>10}")
     for k in keys:
         print(f"{k:<{width}}  {res['metrics_all'][k]:>10.4f}  {res['metrics_success'][k]:>10.4f}")
@@ -215,7 +271,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
     env_cfg.commands.motion.eval_mode = True
-    env_cfg.terminations.clip_end = DoneTerm(func=motion_clip_end, params={"command_name": "motion"}, time_out=True)
+    if env_cfg.commands.motion.eval_success_mode == "goal_success":
+        for name in ("anchor_pos", "anchor_ori", "object_pos", "object_ori", "ee_body_pos", "bad_contact", "clip_end"):
+            setattr(env_cfg.terminations, name, None)
+        env_cfg.terminations.goal_success = DoneTerm(
+            func=goal_success, params={"command_name": "motion"}, time_out=True
+        )
+        env_cfg.terminations.robot_fallen = DoneTerm(func=robot_fallen, params={"command_name": "motion"})
+    else:
+        env_cfg.terminations.clip_end = DoneTerm(func=motion_clip_end, params={"command_name": "motion"}, time_out=True)
     num_clips = read_motion_num_clips(env_cfg.commands.motion.motion_files)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else num_clips
     print(f"[INFO] Clip-wise eval: {num_clips} clip(s) -> {env_cfg.scene.num_envs} env(s)")
@@ -304,6 +368,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         res["checkpoint"] = resume_path
         res["motion_files"] = list(env_cfg.commands.motion.motion_files)
         res["eval_start_mode"] = env_cfg.commands.motion.eval_start_mode
+        res["eval_clip_mode"] = env_cfg.commands.motion.eval_clip_mode
+        if env_cfg.commands.motion.eval_success_mode == "goal_success":
+            res["goal_success_config"] = {
+                name: getattr(env_cfg.commands.motion, name) for name in (
+                    "goal_position_threshold", "goal_rotation_threshold_deg", "goal_hold_seconds",
+                    "fallen_height_threshold", "fallen_tilt_threshold_deg",
+                )
+            }
+            res["goal_success_config"]["episode_length_s"] = env_cfg.episode_length_s
         res["seed"] = env_cfg.seed
         with open(out_file, "w") as f:
             json.dump(res, f, indent=2)

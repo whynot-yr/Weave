@@ -185,6 +185,15 @@ class MotionCommand(CommandTerm):
             raise ValueError(f"Invalid goal_sampling_mode: {cfg.goal_sampling_mode}")
         if cfg.eval_start_mode not in ("zero", "random"):
             raise ValueError(f"Invalid eval_start_mode: {cfg.eval_start_mode}")
+        if cfg.eval_clip_mode not in ("same_clip", "cross_clip"):
+            raise ValueError(f"Invalid eval_clip_mode: {cfg.eval_clip_mode}")
+
+        if cfg.eval_success_mode not in ("reference", "goal_success"):
+            raise ValueError(f"Invalid eval_success_mode: {cfg.eval_success_mode}")
+        if cfg.eval_success_mode == "goal_success" and not cfg.eval_mode:
+            raise ValueError("goal_success is evaluation-only")
+        if min(cfg.goal_position_threshold, cfg.goal_rotation_threshold_deg, cfg.goal_hold_seconds) <= 0:
+            raise ValueError("Goal thresholds and hold time must be positive")
 
         # Set up robot references before super().__init__ because it calls _set_debug_vis_impl
         self.robot: Articulation = env.scene[cfg.asset_name]
@@ -199,6 +208,8 @@ class MotionCommand(CommandTerm):
         # per-env state
         self.time_steps     = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.goal_time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.first_goal_time_steps = torch.zeros_like(self.time_steps)
+        self.goal_reached = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # env -> object (fixed for the whole run; drives object spawn + surface)
         self.env_object     = torch.arange(self.num_envs, device=self.device) % self.motion.num_objects
         # env -> current clip within that object (re-sampled every episode); init to the object's first clip
@@ -224,6 +235,10 @@ class MotionCommand(CommandTerm):
             self._eval_env_clip = torch.arange(self.num_envs, device=self.device) % self.motion.num_clips
             self.env_clip = self._eval_env_clip.clone()
 
+        # Initialization may come from A while env_clip/time_steps track B.
+        self.init_clip_ids = self.env_clip.clone()
+        self.init_time_steps = self.time_steps.clone()
+
         # caches refreshed in _update_command
         self._current_frame: MotionData | None = None
         self._future_joint_pos: torch.Tensor
@@ -244,11 +259,12 @@ class MotionCommand(CommandTerm):
 
         # initial frame so properties are valid before the first _update_command
         self._resample_goal()
+        self.first_goal_time_steps.copy_(self.goal_time_steps)
         self._refresh_caches()
 
     # ------------------------------------------------------------------- caches
 
-    def _resample_goal(self, env_ids: Sequence[int] | None = None) -> None:
+    def _resample_goal(self, env_ids: Sequence[int] | None = None, from_frames: torch.Tensor | None = None) -> None:
         """Select terminal or strictly future goal frames, then cache their poses."""
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
@@ -262,7 +278,8 @@ class MotionCommand(CommandTerm):
             self.goal_time_steps[env_ids] = last
         else:
             # Uniform integer in [t + 1, last]; at the final frame, hold last.
-            low = torch.minimum(self.time_steps[env_ids] + 1, last)
+            base_frames = self.time_steps[env_ids] if from_frames is None else from_frames
+            low = torch.minimum(base_frames + 1, last)
             count = last - low + 1
             offset = (torch.rand(env_ids.numel(), device=self.device) * count).long()
             self.goal_time_steps[env_ids] = low + offset
@@ -511,6 +528,39 @@ class MotionCommand(CommandTerm):
         self.metrics["error_object_pos"] = torch.norm(self.ref_obj_pos_w - self.obj_pos_w, dim=-1)
         self.metrics["error_object_rot"] = quat_error_magnitude(self.ref_obj_quat_w, self.obj_quat_w)
 
+    def _cross_clip_candidates(self, init_clips: torch.Tensor) -> torch.Tensor:
+        """Other clips of the same object, one candidate mask per initialization clip."""
+        clips = torch.arange(self.motion.num_clips, device=self.device)
+        return (clips[None, :] != init_clips[:, None]) & (
+            self.motion.clip_object[None, :] == self.motion.clip_object[init_clips, None]
+        )
+
+    def _sample_eval_start_frames(self, init_clips: torch.Tensor) -> torch.Tensor:
+        """Sample A's start while ensuring another clip has a strictly future frame."""
+        counts = (self.motion.clip_lengths[init_clips] - 1).clamp(min=1)
+        if self.cfg.eval_clip_mode == "cross_clip":
+            candidates = self._cross_clip_candidates(init_clips)
+            other_counts = torch.where(candidates, self.motion.clip_lengths[None, :] - 1, 0).amax(dim=1)
+            counts = torch.minimum(counts, other_counts)
+            if (counts <= 0).any():
+                invalid = init_clips[counts <= 0].tolist()
+                raise ValueError(
+                    "cross_clip evaluation requires another clip of the same object with at least two frames;"
+                    f" no compatible reference for initialization clip(s) {invalid}"
+                )
+        if self.cfg.eval_start_mode == "random":
+            return (torch.rand(init_clips.numel(), device=self.device) * counts).long()
+        return torch.zeros_like(init_clips)
+
+    def _sample_cross_clip(self, init_clips: torch.Tensor, start_frames: torch.Tensor) -> torch.Tensor:
+        """Uniformly choose B != A with B[start + 1] available, without changing start."""
+        valid = self._cross_clip_candidates(init_clips) & (
+            self.motion.clip_lengths[None, :] > start_frames[:, None] + 1
+        )
+        if not valid.any(dim=1).all():
+            raise ValueError("No compatible cross-clip reference with a strictly future goal at the start frame")
+        return torch.multinomial(valid.float(), num_samples=1).squeeze(1)
+
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
@@ -518,29 +568,36 @@ class MotionCommand(CommandTerm):
 
         # 1. pick a clip and starting frame within each environment's fixed object
         if self.cfg.eval_mode:
-            self.env_clip[env_ids] = self._eval_env_clip[env_ids]
-            if self.cfg.eval_start_mode == "random":
-                lengths = self.motion.clip_lengths[self.env_clip[env_ids]]
-                # Exclude the terminal frame so a strictly future goal exists.
-                # Single-frame clips retain their only frame as both start and goal.
-                counts = (lengths - 1).clamp(min=1)
-                self.time_steps[env_ids] = (torch.rand(len(env_ids), device=self.device) * counts).long()
-            else:
-                self.time_steps[env_ids] = 0
+            init_clips = self._eval_env_clip[env_ids]
+            start_frames = self._sample_eval_start_frames(init_clips)
+            reference_clips = (
+                self._sample_cross_clip(init_clips, start_frames)
+                if self.cfg.eval_clip_mode == "cross_clip" else init_clips
+            )
+            self.env_clip[env_ids] = reference_clips
+            self.time_steps[env_ids] = start_frames
         elif self.cfg.rsi:
             n = len(env_ids)
             self.env_clip[env_ids] = self.motion.sample_clip(objects)
             T_per_env = self.motion.clip_lengths[self.env_clip[env_ids]].float() - 1   # (n,)
             self.time_steps[env_ids] = (torch.rand(n, device=self.device) * T_per_env).long().clamp(min=0)
+            init_clips = self.env_clip[env_ids]
         else:
             self.env_clip[env_ids] = self.motion.first_clip(objects)
             self.time_steps[env_ids] = 0
+            init_clips = self.env_clip[env_ids]
+
+        self.init_clip_ids[env_ids] = init_clips
+        self.init_time_steps[env_ids] = self.time_steps[env_ids]
 
         # Also runs on clip rollover: select goals relative to the new clip/start.
         self._resample_goal(env_ids)
+        self.goal_reached[env_ids] = False
+        # Metadata for the first sampled goal; not a reference-error boundary.
+        self.first_goal_time_steps[env_ids] = self.goal_time_steps[env_ids]
 
-        # 2. fetch fresh motion data for the reset envs (don't rely on cache yet)
-        new_frames = self.motion.frames(self.env_clip[env_ids], self.time_steps[env_ids])
+        # 2. Restore A's state, even when the reference and goals now come from B.
+        new_frames = self.motion.frames(self.init_clip_ids[env_ids], self.init_time_steps[env_ids])
 
         # 3. root pose from motion's anchor pose
         root_pos = new_frames.body_pos_w[:, self.anchor_index] + self._env.scene.env_origins[env_ids]
@@ -589,7 +646,12 @@ class MotionCommand(CommandTerm):
         else:
             self._resample_command(torch.where(self.time_steps >= clip_end)[0])
 
-        if self.cfg.goal_sampling_mode == "random_future":
+        if self.cfg.eval_mode and self.cfg.eval_success_mode == "goal_success":
+            last = self.motion.clip_lengths[self.env_clip] - 1
+            ids = torch.where(self.goal_reached & (self.goal_time_steps < last))[0]
+            self._resample_goal(ids, from_frames=self.goal_time_steps[ids].clone())
+            self.goal_reached.zero_()
+        elif self.cfg.goal_sampling_mode == "random_future":
             # Rollover may have changed clips and already sampled their new goals.
             last = self.motion.clip_lengths[self.env_clip] - 1
             reached = self.time_steps >= self.goal_time_steps
@@ -699,6 +761,17 @@ class MotionCommandCfg(CommandTermCfg):
 
     eval_start_mode: str = "zero"
     """Evaluation start: zero or uniformly random non-terminal frame (frame 0 for single-frame clips)."""
+
+    eval_success_mode: str = "reference"
+    """reference: track the timeline; goal_success: reach staged object goals."""
+    goal_position_threshold: float = 0.10
+    goal_rotation_threshold_deg: float = 15.0
+    goal_hold_seconds: float = 0.5
+    fallen_height_threshold: float = 0.35
+    fallen_tilt_threshold_deg: float = 75.0
+
+    eval_clip_mode: str = "same_clip"
+    """same_clip: initialize and track A; cross_clip: initialize from A[t] and track another clip B from t."""
 
     motion_files: list[str] = []
     """List of motion npz files. N=1 is single-object training; N>1 is multi-object."""

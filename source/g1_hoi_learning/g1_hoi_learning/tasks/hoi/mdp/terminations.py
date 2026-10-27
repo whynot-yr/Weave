@@ -135,3 +135,79 @@ class bad_contact(ManagerTermBase):
         self.lost_counter[~lost] = 0
 
         return self.lost_counter >= max_lost_frames
+
+
+class goal_success(ManagerTermBase):
+    """Check object goals once per post-physics step, before automatic reset.
+
+    Snapshots deliberately survive reset so the evaluator can read terminal states.
+    """
+
+    def __init__(self, cfg: TerminationTermCfg, env: _ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.hold = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self.elapsed = torch.zeros_like(self.hold)
+        self.history = [[] for _ in range(env.num_envs)]
+        self.snapshot = {}
+        self.snapshot_history = list(self.history)
+
+    def reset(self, env_ids: Sequence[int] | None = None):
+        ids = list(range(len(self.history))) if env_ids is None else env_ids
+        if isinstance(ids, slice):
+            ids = list(range(len(self.history)))[ids]
+        for i in ids:
+            self.history[int(i)] = []
+        self.hold[ids] = 0
+        self.elapsed[ids] = 0
+
+    def __call__(self, env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+        import math
+
+        command: MotionCommand = env.command_manager.get_term(command_name)
+        cfg = command.cfg
+        self.elapsed += 1
+        pos_error = torch.linalg.vector_norm(command.obj_pos_w - command.goal_obj_pos_w, dim=-1)
+        rot_error = math_utils.quat_error_magnitude(command.obj_quat_w, command.goal_obj_quat_w)
+        inside = (pos_error < cfg.goal_position_threshold) & (rot_error < math.radians(cfg.goal_rotation_threshold_deg))
+        self.hold = torch.where(inside, self.hold + 1, 0)
+        reached = self.hold >= math.ceil(cfg.goal_hold_seconds / env.step_dt)
+        command.goal_reached.copy_(reached)
+        last = command.motion.clip_lengths[command.env_clip] - 1
+        success = reached & (command.goal_time_steps == last)
+        for i in reached.nonzero(as_tuple=False).flatten().tolist():
+            self.history[i] = [*self.history[i], {
+                "frame": int(command.goal_time_steps[i]),
+                "elapsed_seconds": float(self.elapsed[i]) * env.step_dt,
+            }]
+        self.hold[reached] = 0
+        final = command.motion.frames(command.env_clip, last)
+        self.snapshot = {
+            "elapsed_seconds": self.elapsed.clone().float() * env.step_dt,
+            "current_goal_frame": command.goal_time_steps.clone(),
+            "current_goal_reached": reached.clone(),
+            "current_goal_position_error": pos_error.clone(),
+            "current_goal_rotation_error": rot_error.clone(),
+            "final_object_position_error": torch.linalg.vector_norm(
+                command.obj_pos_w - (final.object_pos_w + env.scene.env_origins), dim=-1
+            ),
+            "final_object_rotation_error": math_utils.quat_error_magnitude(
+                command.obj_quat_w, final.object_quat_w
+            ),
+            "final_goal_reached": success.clone(),
+        }
+        self.snapshot_history = list(self.history)
+        return success
+
+
+def robot_fallen(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Absolute root height and tilt checks, independent of the reference motion."""
+    import math
+
+    command: MotionCommand = env.command_manager.get_term(command_name)
+    gravity = torch.zeros_like(command.robot_anchor_pos_w)
+    gravity[:, 2] = -1
+    projected = math_utils.quat_apply_inverse(command.robot_anchor_quat_w, gravity)
+    height = command.robot_anchor_pos_w[:, 2] - env.scene.env_origins[:, 2]
+    return (height < command.cfg.fallen_height_threshold) | (
+        -projected[:, 2] < math.cos(math.radians(command.cfg.fallen_tilt_threshold_deg))
+    )

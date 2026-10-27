@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - eval_cross_clip
+  - _self_
+
+env:
+  episode_length_s: 20.0
+  commands:
+    motion:
+      eval_success_mode: goal_success
+      goal_position_threshold: 0.10
+      goal_rotation_threshold_deg: 15.0
+      goal_hold_seconds: 0.5
+      fallen_height_threshold: 0.35
+      fallen_tilt_threshold_deg: 75.0

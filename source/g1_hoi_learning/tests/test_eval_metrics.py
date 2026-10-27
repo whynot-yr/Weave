@@ -19,21 +19,32 @@ def make_evaluator():
     namespace = {"torch": torch}
     exec(compile(module, str(path), "exec"), namespace)
 
-    def make(lengths, starts):
+    def make(lengths, starts, init_clips=None, reference_clips=None, task=False):
         n = len(lengths)
         command = SimpleNamespace(
-            env_clip=torch.arange(n), time_steps=torch.tensor(starts),
+            env_clip=torch.tensor(reference_clips) if reference_clips is not None else torch.arange(n),
+            time_steps=torch.tensor(starts), init_time_steps=torch.tensor(starts),
+            first_goal_time_steps=torch.tensor(starts) + 1,
+            cfg=SimpleNamespace(eval_success_mode="goal_success" if task else "reference"),
+            init_clip_ids=torch.tensor(init_clips) if init_clips is not None else torch.arange(n),
             motion=SimpleNamespace(clip_lengths=torch.tensor(lengths)),
             metrics={"error": torch.arange(1, n + 1).float()},
             _update_metrics=lambda: None,
         )
         flags = {name: torch.zeros(n, dtype=torch.bool) for name in ("clip_end", "time_out", "failure")}
+        if task:
+            flags["goal_success"] = flags.pop("clip_end")
+        goal_term = SimpleNamespace(
+            snapshot={"final_goal_reached": torch.zeros(n, dtype=torch.bool),
+                      "final_object_position_error": torch.arange(n).float()},
+            snapshot_history=[[] for _ in range(n)],
+        )
         term_mgr = SimpleNamespace(
             active_terms=list(flags), get_term=lambda name: flags[name],
-            get_term_cfg=lambda name: SimpleNamespace(time_out=name != "failure"),
+            get_term_cfg=lambda name: SimpleNamespace(time_out=name != "failure", func=goal_term),
         )
         raw = SimpleNamespace(
-            device="cpu", num_envs=n,
+            device="cpu", num_envs=n, max_episode_length=1000,
             command_manager=SimpleNamespace(get_term=lambda name: command),
             termination_manager=term_mgr,
         )
@@ -68,6 +79,7 @@ def test_progress_respects_termination_before_command_advance(make_evaluator, le
     assert clip["length"] == length
     assert clip["remaining_length"] == length - start
     assert clip["steps"] == length - start
+    assert clip["metric_steps"] == length - start
     assert clip["success"]
     assert clip["cause"] == "clip_end"
     assert result["progress_rate"] == 1.0
@@ -125,3 +137,60 @@ def test_timeout_before_clip_end_is_not_success(make_evaluator):
     assert not clip["success"]
     assert clip["cause"] == "time_out"
     assert clip["progress"] == pytest.approx(1 / 3)
+
+
+def test_cross_clip_metadata_and_progress_use_b_length_and_survive_reset(make_evaluator):
+    evaluator, command, flags = make_evaluator([8, 4], [2, 0], init_clips=[0, 1], reference_clips=[1, 0])
+    assert evaluator.max_steps == 13  # B lengths [4, 8], remaining lengths [2, 8].
+    for _ in range(2):
+        evaluator.collect()
+    flags["clip_end"][0] = True
+    evaluator.update(torch.tensor([True, False]), torch.tensor([True, False]))
+    command.init_clip_ids[:] = torch.tensor([1, 0])
+    command.init_time_steps.fill_(1)
+    command.env_clip[:] = torch.tensor([0, 1])
+    command.time_steps.fill_(1)
+
+    first, second = evaluator.results()["clips"]
+    assert first["init_clip_id"] == 0
+    assert first["init_clip_name"] == "clip0"
+    assert first["init_frame"] == 2
+    assert first["reference_clip_id"] == first["clip_id"] == 1
+    assert first["reference_clip_name"] == first["name"] == "clip1"
+    assert first["reference_start_frame"] == 2
+    assert first["reference_length"] == first["length"] == 4
+    assert first["remaining_length"] == 2
+    assert first["progress"] == 1.0
+    assert first["success"]
+    assert second["init_clip_id"] == 1
+    assert second["reference_clip_id"] == 0
+    assert second["progress"] == 0.25
+
+
+def test_all_steps_record_reference_errors(make_evaluator):
+    evaluator, command, flags = make_evaluator([8], [0])
+    evaluator.collect()
+    assert evaluator.results()["clips"][0]["metric_steps"] == 1
+    assert evaluator.results()["metrics_all"]["error"] == 1
+
+
+def test_task_evaluator_terminal_snapshot_and_failure_priority(make_evaluator):
+    evaluator, command, flags = make_evaluator([5, 5, 5], [0, 0, 0], task=True)
+    assert evaluator.max_steps == 1001
+    evaluator.collect()
+    flags["goal_success"][:2] = True
+    flags["failure"][1] = True
+    flags["time_out"][2] = True
+    evaluator.goal_term.snapshot["final_goal_reached"][:2] = True
+    evaluator.goal_term.snapshot_history[0] = [{"frame": 4, "elapsed_seconds": 0.5}]
+    evaluator.update(torch.ones(3, dtype=torch.bool), torch.ones(3, dtype=torch.bool))
+    result = evaluator.results()
+    assert [r["success"] for r in result["clips"]] == [True, False, False]
+    assert [r["cause"] for r in result["clips"]] == ["goal_success", "failure", "time_out"]
+    assert "progress_rate" not in result
+    assert all("progress" not in row for row in result["clips"])
+    assert result["failures"] == {"failure": 1, "time_out": 1}
+    assert result["clips"][0]["goals_reached"] == 1
+    evaluator.goal_term.snapshot["final_object_position_error"].fill_(999)
+    evaluator.update(torch.ones(3, dtype=torch.bool), torch.ones(3, dtype=torch.bool))
+    assert evaluator.results()["clips"][0]["final_object_position_error"] == 0

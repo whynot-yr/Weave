@@ -9,6 +9,7 @@ env:
     motion:
       eval_mode: true
       eval_start_mode: zero
+      eval_clip_mode: same_clip
       rsi: false
       debug_vis: true
       show_goal_poses: true

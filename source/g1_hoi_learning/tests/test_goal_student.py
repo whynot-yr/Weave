@@ -28,15 +28,31 @@ def definitions(path, names, namespace):
     return namespace
 
 
+@pytest.fixture(scope="module")
+def isaac_math():
+    # Prefer the installed editable package over the repository's isaaclab/ namespace.
+    specs = (finder.find_spec("isaaclab", None) for finder in sys.meta_path)
+    package_spec = next(spec for spec in specs if spec is not None and spec.origin is not None)
+    spec = importlib.util.spec_from_file_location("goal_test_math", Path(package_spec.origin).parent / "utils/math.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.fixture
-def command():
+def command(isaac_math):
     ns = definitions(
         PACKAGE / "tasks/hoi/mdp/commands.py",
         {"MotionData", "MotionLoader", "MotionCommand"},
-        dict(torch=torch, np=np, Sequence=Sequence, TensorClass=TensorClass, CommandTerm=object),
+        dict(
+            torch=torch, np=np, Sequence=Sequence, TensorClass=TensorClass, CommandTerm=object,
+            quat_error_magnitude=isaac_math.quat_error_magnitude,
+        ),
     )
     loader = ns["MotionLoader"].__new__(ns["MotionLoader"])
     loader.clip_lengths = torch.tensor([4, 6, 3])
+    loader.num_clips = 3
+    loader.clip_object = torch.zeros(3, dtype=torch.long)
     loader.clip_starts = torch.tensor([0, 4, 10, 13])
     loader.first_clip = lambda objects: torch.zeros_like(objects)
     loader.sample_clip = lambda objects: torch.ones_like(objects)
@@ -63,8 +79,13 @@ def command():
     cmd.body_indices = [0, 1]
     cmd.env_object, cmd.env_clip = torch.zeros(3, dtype=torch.long), torch.tensor([0, 2, 1])
     cmd.time_steps, cmd.future_offsets = torch.tensor([1, 0, 3]), torch.tensor([0, 2])
+    cmd.init_clip_ids, cmd.init_time_steps = cmd.env_clip.clone(), cmd.time_steps.clone()
     cmd.goal_time_steps = torch.zeros(3, dtype=torch.long)
-    cmd.cfg = SimpleNamespace(eval_mode=False, eval_start_mode="zero", rsi=True, goal_sampling_mode="terminal")
+    cmd.first_goal_time_steps = torch.zeros_like(cmd.time_steps)
+    cmd.goal_reached = torch.zeros(3, dtype=torch.bool)
+    cmd.cfg = SimpleNamespace(
+        eval_success_mode="reference", eval_mode=False, eval_start_mode="zero", eval_clip_mode="same_clip", rsi=True, goal_sampling_mode="terminal"
+    )
     origins = torch.tensor([[100.0, 0, 0], [0, 100.0, 0], [0, 0, 100.0]])
     cmd._env = SimpleNamespace(scene=SimpleNamespace(env_origins=origins))
     actual = SimpleNamespace(
@@ -82,6 +103,7 @@ def command():
     )
     cmd.object = SimpleNamespace(write_root_state_to_sim=lambda *args, **kwargs: None)
     cmd._resample_goal()
+    cmd.first_goal_time_steps.copy_(cmd.goal_time_steps)
     cmd._refresh_caches()
     return cmd
 
@@ -178,9 +200,11 @@ def test_random_eval_start_and_goal_bounds(command, monkeypatch, draw, expected,
     assert_goal_matches_selected_frame(command)
 
 
-def test_random_eval_restores_full_reference_state(command, monkeypatch):
+@pytest.mark.parametrize("clip_mode", ["same_clip", "cross_clip"])
+def test_random_eval_restores_full_reference_state(command, monkeypatch, clip_mode):
     command.cfg.eval_mode = True
     command.cfg.eval_start_mode = "random"
+    command.cfg.eval_clip_mode = clip_mode
     command.cfg.goal_sampling_mode = "random_future"
     command._eval_env_clip = torch.tensor([1, 0, 2])
     buffer = command.motion.buffer
@@ -209,7 +233,7 @@ def test_random_eval_restores_full_reference_state(command, monkeypatch):
 
     command._resample_command(torch.arange(3))
 
-    reference = command.motion.frames(command.env_clip, command.time_steps)
+    reference = command.motion.frames(command.init_clip_ids, command.init_time_steps)
     origins = command._env.scene.env_origins
     torch.testing.assert_close(writes["root"][0], torch.cat((
         reference.body_pos_w[:, 0] + origins, reference.body_quat_w[:, 0],
@@ -221,7 +245,12 @@ def test_random_eval_restores_full_reference_state(command, monkeypatch):
         reference.object_pos_w + origins, reference.object_quat_w,
         reference.object_lin_vel_w, reference.object_ang_vel_w,
     ), dim=-1))
-    torch.testing.assert_close(command.joint_pos, reference.joint_pos)
+    running_reference = command.motion.frames(command.env_clip, command.time_steps)
+    torch.testing.assert_close(command.joint_pos, running_reference.joint_pos)
+    torch.testing.assert_close(command.init_time_steps, command.time_steps)
+    if clip_mode == "cross_clip":
+        assert (command.env_clip != command.init_clip_ids).all()
+        assert not torch.equal(reference.joint_pos, running_reference.joint_pos)
     assert_goal_matches_selected_frame(command)
 
 
@@ -276,6 +305,183 @@ def test_invalid_eval_start_mode_rejected(command):
     cfg = SimpleNamespace(goal_sampling_mode="random_future", eval_start_mode="invalid")
     with pytest.raises(ValueError, match="Invalid eval_start_mode"):
         type(command)(cfg, None)
+
+
+def test_invalid_eval_clip_mode_rejected(command):
+    cfg = SimpleNamespace(goal_sampling_mode="random_future", eval_start_mode="zero", eval_clip_mode="invalid")
+    with pytest.raises(ValueError, match="Invalid eval_clip_mode"):
+        type(command)(cfg, None)
+
+
+@pytest.mark.parametrize("draw, expected", [(0.0, [0, 0, 0]), (0.5, [1, 1, 1]), (0.999999, [2, 2, 1])])
+def test_cross_clip_start_bounds_leave_a_future_goal(command, monkeypatch, draw, expected):
+    command.cfg.eval_mode = True
+    command.cfg.eval_clip_mode = "cross_clip"
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.full((n,), draw, device=device))
+
+    command._resample_command(torch.arange(3))
+
+    assert command.init_clip_ids.tolist() == [1, 0, 2]
+    assert command.init_time_steps.tolist() == expected
+    assert command.time_steps.tolist() == expected
+    assert (command.env_clip != command.init_clip_ids).all()
+    assert (command.goal_time_steps > command.time_steps).all()
+    assert (command.goal_time_steps < command.motion.clip_lengths[command.env_clip]).all()
+    assert_goal_matches_selected_frame(command)
+
+
+def test_cross_clip_sampling_filters_object_and_length(command):
+    command.motion.clip_object = torch.tensor([0, 0, 1])
+    assert command._sample_cross_clip(torch.tensor([0]), torch.tensor([2])).tolist() == [1]
+    # A=1 at t=3: clip 0 has no future frame and clip 2 is another object.
+    with pytest.raises(ValueError, match="strictly future"):
+        command._sample_cross_clip(torch.tensor([1]), torch.tensor([3]))
+
+
+def test_cross_clip_sampling_can_choose_each_eligible_clip(command):
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(42)
+        selected = command._sample_cross_clip(torch.zeros(128, dtype=torch.long), torch.zeros(128, dtype=torch.long))
+    assert set(selected.tolist()) == {1, 2}
+
+
+@pytest.mark.parametrize("lengths,objects", [([4, 6, 3], [0, 1, 1]), ([4, 1, 1], [0, 0, 0])])
+def test_cross_clip_reset_rejects_missing_compatible_reference(command, lengths, objects):
+    command.cfg.eval_mode = True
+    command.cfg.eval_clip_mode = "cross_clip"
+    command.motion.clip_lengths = torch.tensor(lengths)
+    command.motion.clip_object = torch.tensor(objects)
+    command._eval_env_clip = torch.tensor([0, 1, 2])
+    before = command.env_clip.clone()
+    with pytest.raises(ValueError, match="no compatible reference"):
+        command._resample_command([0])
+    torch.testing.assert_close(command.env_clip, before)
+
+
+def test_cross_clip_can_initialize_from_a_single_frame_clip(command):
+    command.cfg.eval_mode = True
+    command.cfg.eval_clip_mode = "cross_clip"
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command.motion.clip_lengths[0] = 1
+    command._eval_env_clip = torch.tensor([0, 1, 2])
+
+    command._resample_command([0])
+
+    assert command.init_clip_ids[0] == 0
+    assert command.init_time_steps[0] == command.time_steps[0] == 0
+    assert command.env_clip[0] != 0
+    assert command.goal_time_steps[0] > 0
+
+
+def test_cross_clip_goals_stay_in_b_without_resetting_state(command, monkeypatch):
+    command.cfg.eval_mode = True
+    command.cfg.eval_clip_mode = "cross_clip"
+    command.cfg.eval_start_mode = "zero"
+    command.cfg.goal_sampling_mode = "random_future"
+    command.motion.clip_object = torch.tensor([0, 0, 1])
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    monkeypatch.setattr(torch, "rand", lambda n, *, device: torch.zeros(n, device=device))
+    command._resample_command([0])
+    assert command.env_clip[0] == 0
+    assert command.goal_time_steps[0] == 1
+    assert command.first_goal_time_steps[0] == 1
+
+    def reject_reset(*args, **kwargs):
+        pytest.fail("Advancing B's goals must not change B or reset simulation state")
+
+    monkeypatch.setattr(command, "_sample_cross_clip", reject_reset)
+    monkeypatch.setattr(command.robot, "write_root_state_to_sim", reject_reset)
+    monkeypatch.setattr(command.robot, "write_joint_state_to_sim", reject_reset)
+    monkeypatch.setattr(command.object, "write_root_state_to_sim", reject_reset)
+    for expected_goal in (2, 3, 3, 3):
+        command._update_command()
+        assert command.env_clip[0] == 0
+        assert command.init_clip_ids[0] == 1
+        assert command.init_time_steps[0] == 0
+        assert command.goal_time_steps[0] == expected_goal
+        assert command.first_goal_time_steps[0] == 1
+        assert_goal_matches_selected_frame(command)
+    assert command.time_steps[0] == 3  # Ends at B's last frame, not A's frame 5.
+
+
+def test_cross_clip_partial_reset_and_seed_reproducibility(command):
+    command.cfg.eval_mode = True
+    command.cfg.eval_clip_mode = "cross_clip"
+    command.cfg.eval_start_mode = "random"
+    command.cfg.goal_sampling_mode = "random_future"
+    command._eval_env_clip = torch.tensor([1, 0, 2])
+    unchanged = tuple(value[1:].clone() for value in (
+        command.env_clip, command.time_steps, command.init_clip_ids, command.init_time_steps,
+        command.goal_time_steps, command.goal_joint_pos, command.first_goal_time_steps,
+    ))
+    draws = []
+    with torch.random.fork_rng(devices=[]):
+        for _ in range(2):
+            torch.manual_seed(42)
+            command._resample_command([0])
+            draws.append(tuple(value.clone() for value in (
+                command.env_clip, command.time_steps, command.goal_time_steps,
+            )))
+    torch.testing.assert_close(draws[0], draws[1])
+    for before, after in zip(unchanged, (
+        command.env_clip, command.time_steps, command.init_clip_ids, command.init_time_steps,
+        command.goal_time_steps, command.goal_joint_pos, command.first_goal_time_steps,
+    )):
+        torch.testing.assert_close(after[1:], before)
+
+
+@pytest.fixture
+def reference_checks(command, isaac_math):
+    command.cfg.eval_mode = True
+    command.cfg.eval_clip_mode = "cross_clip"
+    command.first_goal_time_steps[:] = torch.tensor([2, 2, 4])
+    command.time_steps[:] = torch.tensor([1, 2, 5])  # Before, at, and after the first goal.
+    command._refresh_caches()
+    command.robot.find_bodies = lambda names, **kwargs: ([0, 1], ["left", "right"])
+    command.robot.data.GRAVITY_VEC_W = torch.tensor([0.0, 0, -1]).repeat(3, 1)
+    command.robot.data.joint_pos = torch.zeros(3, 3)
+    command.robot.data.joint_vel = torch.zeros(3, 3)
+    command.robot.data.body_quat_w[:] = torch.tensor([0.0, 1, 0, 0])
+    command.object.data = SimpleNamespace(
+        root_pos_w=command._env.scene.env_origins.clone(),
+        root_quat_w=torch.tensor([0.0, 1, 0, 0]).repeat(3, 1),
+    )
+    command.metrics = {f"error_{name}": torch.full((3,), 123.0) for name in (
+        "anchor_pos", "anchor_rot", "body_pos", "body_rot", "joint_pos", "joint_vel", "object_pos", "object_rot"
+    )}
+    env = SimpleNamespace(
+        num_envs=3, device="cpu", command_manager=SimpleNamespace(get_term=lambda name: command),
+        scene={
+            "robot": command.robot,
+            "contact_sensor": SimpleNamespace(data=SimpleNamespace(force_matrix_w=torch.zeros(3, 1, 2, 3))),
+        },
+    )
+    ns = definitions(
+        PACKAGE / "tasks/hoi/mdp/terminations.py",
+        {"bad_anchor_pos", "bad_anchor_ori", "bad_object_pos", "bad_object_ori",
+         "bad_motion_body_pos", "bad_motion_body_pos_z_only", "bad_contact", "motion_clip_end"},
+        dict(torch=torch, math_utils=isaac_math, ManagerTermBase=object),
+    )
+    calls = {
+        "bad_anchor_pos": {}, "bad_object_pos": {},
+        "bad_anchor_ori": {"asset_cfg": SimpleNamespace(name="robot")},
+        "bad_object_ori": {"asset_cfg": SimpleNamespace(name="robot")},
+        "bad_motion_body_pos": {"body_names": ["left", "right"]},
+        "bad_motion_body_pos_z_only": {"body_names": ["left", "right"]},
+    }
+    return command, env, ns, calls
+
+
+def test_cross_clip_reference_errors_start_immediately(reference_checks):
+    command, env, ns, calls = reference_checks
+    command._update_metrics()
+    assert (command.metrics["error_anchor_pos"] > 0).all()
+    for name, kwargs in calls.items():
+        assert ns[name](env, command_name="motion", threshold=0.25, **kwargs).all(), name
 
 
 def assert_goal_matches_selected_frame(command):
@@ -422,21 +628,14 @@ def test_random_goal_sampling_is_reproducible_with_fixed_seed(command):
     torch.testing.assert_close(command.goal_time_steps, before)
 
 
-def test_goal_observations_reanchor_world_target(command):
-    # Prefer the installed editable package over the repository's isaaclab/ namespace.
-    specs = (finder.find_spec("isaaclab", None) for finder in sys.meta_path)
-    package_spec = next(spec for spec in specs if spec is not None and spec.origin is not None)
-    isaac_root = Path(package_spec.origin).parent
-    spec = importlib.util.spec_from_file_location("goal_test_math", isaac_root / "utils/math.py")
-    math_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(math_module)
+def test_goal_observations_reanchor_world_target(command, isaac_math):
     ns = definitions(
         PACKAGE / "tasks/hoi/mdp/observations.py",
         {"goal_robot_pose", "goal_object_pose"},
         dict(
             torch=torch,
-            matrix_from_quat=math_module.matrix_from_quat,
-            subtract_frame_transforms=math_module.subtract_frame_transforms,
+            matrix_from_quat=isaac_math.matrix_from_quat,
+            subtract_frame_transforms=isaac_math.subtract_frame_transforms,
         ),
     )
     env = SimpleNamespace(num_envs=3, command_manager=SimpleNamespace(get_term=lambda name: command))
@@ -591,3 +790,85 @@ def test_standard_runner_two_updates_and_termination_logging(learning, tmp_path)
         torch.testing.assert_close(
             restored.alg.policy.act_inference(learning.obs), runner.alg.policy.act_inference(learning.obs)
         )
+
+
+def test_task_goal_advances_only_on_arrival_and_uses_goal_frame(command):
+    command.cfg.eval_mode = True
+    command.cfg.eval_success_mode = "goal_success"
+    command.cfg.goal_sampling_mode = "random_future"
+    command.goal_time_steps[:] = 1
+    command.time_steps[:] = command.motion.clip_lengths[command.env_clip] - 1
+    command._update_command()
+    assert command.goal_time_steps.tolist() == [1, 1, 1]
+    command.goal_reached[0] = True
+    command._update_command()
+    assert 2 <= command.goal_time_steps[0] <= 3
+    assert command.goal_time_steps[1:].tolist() == [1, 1]
+    assert not command.goal_reached.any()
+
+
+@pytest.fixture
+def task_check(command, isaac_math):
+    class TermBase:
+        def __init__(self, cfg, env):
+            pass
+
+    ns = definitions(
+        PACKAGE / "tasks/hoi/mdp/terminations.py", {"goal_success", "robot_fallen"},
+        dict(torch=torch, math_utils=isaac_math, ManagerTermBase=TermBase),
+    )
+    command.cfg.goal_position_threshold = 0.1
+    command.cfg.goal_rotation_threshold_deg = 15.0
+    command.cfg.goal_hold_seconds = 0.06  # Three control steps.
+    command.cfg.fallen_height_threshold = 0.35
+    command.cfg.fallen_tilt_threshold_deg = 75.0
+    command.goal_time_steps[:] = torch.tensor([1, 2, 4])
+    command._refresh_goal()
+    command.object.data = SimpleNamespace(
+        root_pos_w=command.goal_obj_pos_w.clone(), root_quat_w=command.goal_obj_quat_w.clone()
+    )
+    env = SimpleNamespace(
+        num_envs=3, device="cpu", step_dt=0.02, scene=command._env.scene,
+        command_manager=SimpleNamespace(get_term=lambda name: command),
+    )
+    term = ns["goal_success"](None, env)
+    return command, env, term, ns
+
+
+def test_goal_hold_break_reset_and_terminal_snapshot(task_check):
+    command, env, term, _ = task_check
+    assert not term(env, "motion").any()
+    command.object.data.root_pos_w[0, 0] += 1
+    assert not term(env, "motion").any()
+    command.object.data.root_pos_w[0] = command.goal_obj_pos_w[0]
+    assert term(env, "motion").tolist() == [False, True, False]
+    assert command.goal_reached.tolist() == [False, True, True]
+    assert term.hold.tolist() == [1, 0, 0]
+    assert term.snapshot["final_object_position_error"][1] == 0
+    assert len(term.snapshot_history[1]) == 1
+    term.reset(torch.tensor([1]))
+    command.object.data.root_pos_w[1] += 100  # Simulate auto-reset physics state.
+    assert term.snapshot["final_object_position_error"][1] == 0
+    assert len(term.snapshot_history[1]) == 1
+    assert term.history[1] == []
+    assert term.elapsed.tolist() == [3, 0, 3]
+    term.reset(slice(None))
+    assert term.elapsed.tolist() == [0, 0, 0]
+
+
+def test_goal_orientation_requires_full_rotation_but_accepts_quaternion_sign(task_check):
+    command, env, term, _ = task_check
+    command.object.data.root_quat_w[0] *= -1  # Same rotation.
+    command.object.data.root_quat_w[1] = torch.tensor([0.0, 0, 0, 1.0])  # Pure yaw, same gravity.
+    for _ in range(3):
+        term(env, "motion")
+    assert command.goal_reached.tolist() == [True, False, True]
+
+
+def test_fall_check_is_independent_of_reference(task_check):
+    command, env, _, ns = task_check
+    command.robot.data.body_pos_w[:, 0] = env.scene.env_origins
+    command.robot.data.body_pos_w[:, 0, 2] += torch.tensor([1.0, 0.2, 1.0])
+    command.robot.data.body_quat_w[:, 0] = torch.tensor([1.0, 0, 0, 0])
+    command.robot.data.body_quat_w[2, 0] = torch.tensor([0.0, 1, 0, 0])
+    assert ns["robot_fallen"](env, "motion").tolist() == [False, True, True]

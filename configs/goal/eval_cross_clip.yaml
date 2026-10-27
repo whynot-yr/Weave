@@ -1,0 +1,10 @@
+# @package _global_
+# Initialize from A[t], then track another clip B starting at the same frame t.
+defaults:
+  - eval_random
+  - _self_
+
+env:
+  commands:
+    motion:
+      eval_clip_mode: cross_clip

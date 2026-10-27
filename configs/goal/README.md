@@ -103,6 +103,83 @@ reproducible under the same execution conditions; use multiple seeds to compare
 performance across starting states. These suffix evaluations measure a different
 task from completing entire clips from frame 0.
 
+## Initialize from A and follow goals from B
+
+Use `eval_cross_clip` to restore the robot and object from clip `A` at frame `t`,
+then follow the reference and sampled future goals of another clip `B`, starting
+at the same frame index `t`:
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+python scripts/rsl_rl/eval.py \
+  --task G1-Inspire-HOI-Goal-v0 \
+  --config-dir ./configs/goal --config-name eval_cross_clip \
+  --checkpoint /absolute/path/to/student/model_XXXX.pt \
+  --seed 42 --output_dir outputs/eval_cross_clip_seed42 --headless
+```
+
+The environment-to-initialization-clip assignment stays fixed: without
+`--num_envs`, each loaded clip serves as `A` once; `--num_envs 1` uses clip 0 as
+`A`. Each reset independently samples `B != A` uniformly from clips of the same
+object that have a frame after `t`. Different environments may choose the same
+`B`; a different variant of the same motion counts as another clip. `B` stays
+fixed throughout that episode. Goal frames are sampled from `B[t+1, T_B]`, then
+`B[m+1, T_B]` when reference time reaches goal frame `m`. Goal switches do not
+reset simulation state or select another clip.
+
+For random initialization, `t` is sampled uniformly from A's usual non-terminal
+start range restricted to frames with at least one compatible `B`. Thus if A has
+`L_A` frames, the number of possible starts is
+`min(max(L_A-1, 1), max_{B != A, same object}(L_B-1))`. Unequal clip lengths can
+shorten this range; B's time is never silently clamped or remapped. A single-frame
+`A` can initialize at frame 0 if a compatible B has at least two frames. Missing
+compatible clips cause an explicit error. To initialize at frame 0, append
+`env.commands.motion.eval_start_mode=zero`. The existing `eval` and `eval_random`
+configs retain `eval_clip_mode: same_clip`; training is unaffected by this setting.
+
+Reference observations, tracking errors, failure conditions, and clip-end
+termination all use B. Reference errors are recorded and checked from the first
+step: there is no first-goal grace period. Goals still switch on reference time
+in the default `eval_success_mode: reference` mode. Coordinates are not aligned
+between A and B; each environment's origin is added to the dataset coordinates.
+
+`metrics.json` records A/B IDs, names, initialization frame, reference length,
+first goal, executed steps, and measured steps. Only the first episode per
+environment is scored. The number of trials is not the number of unique B clips.
+
+## Object goal success evaluation
+
+Use `--config-name eval_cross_clip_task` for `eval_success_mode: goal_success`.
+A/B selection and initialization are unchanged (random by default; append
+`env.commands.motion.eval_start_mode=zero` for A[0]). All reference error metrics
+are diagnostic and recorded from the first step, but reference-based failures
+and clip-end termination are disabled. Training and checkpoint inputs are unchanged.
+
+The current B[m] goal stays fixed until the actual object is within 0.10 m and
+15 degrees of its full quaternion orientation for 0.5 consecutive seconds.
+Leaving this region resets the hold counter. Then a new goal is drawn uniformly
+from [m+1, T_B]. Reaching and holding the final goal succeeds. Reference time
+continues independently and clamps at the final frame; it never switches goals
+in this mode. The total episode budget is 20 seconds, independent of clip length.
+
+Failure is timeout or an absolute robot fall check: root height below 0.35 m
+relative to the environment origin, or root tilt above 75 degrees. These are
+configurable initial thresholds; calibrate them for legitimate crouching poses.
+A fall takes precedence over simultaneous success. Goal success is object pose
+reaching, not proof of release, support, grasp correctness, or low object speed.
+
+Settings live under `env.commands.motion`: `goal_position_threshold`,
+`goal_rotation_threshold_deg`, `goal_hold_seconds`, `fallen_height_threshold`,
+`fallen_tilt_threshold_deg`. Budget: `env.episode_length_s`.
+
+Task reports contain `success_rate`, `goal_reach_rate`, per-trial elapsed time,
+completed goal history (frame and cumulative completion time), current goal,
+goals sampled/reached, and final object position/rotation errors. Rotation error
+values are radians. Terminal snapshots are captured before automatic reset.
+`progress_rate` is omitted because reference-clock progress is not task progress.
+Completed intermediate goals contribute only to the auxiliary goal reach rate;
+only completing the last B frame counts as whole-episode success.
+
 ## Goal markers and recording
 
 Large XYZ frames show the sampled root (pelvis) and object goals. A cyan dot marks
