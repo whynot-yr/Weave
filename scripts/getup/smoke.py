@@ -33,7 +33,17 @@ def main():
     obs, _ = env.reset()
     assert obs['robot_proprio'].shape == (2, 462)
     assert torch.allclose(obs['robot_proprio'][:, :154], obs['robot_proprio'][:, 154:308])
-    assert torch.allclose(raw.scene['robot'].data.root_pos_w[:, 2], torch.full((2,), .06, device=env.device))
+    robot = raw.scene['robot']
+    state = raw.getup_state
+    expected_root = torch.tensor(cfg.pose.root_pos, device=env.device).expand(2, -1)
+    torch.testing.assert_close(robot.data.root_pos_w-raw.scene.env_origins, expected_root)
+    expected_seed = torch.tensor(
+        [cfg.pose.seed_joint_pos[robot.joint_names[i]] for i in state.drive], device=env.device,
+    ).expand(2, -1)
+    torch.testing.assert_close(robot.data.joint_pos[:, state.drive], expected_seed)
+    assert not torch.allclose(robot.data.default_joint_pos[:, state.drive], expected_seed)
+    torch.testing.assert_close(state.action._offset, robot.data.default_joint_pos[:, state.drive])
+    assert torch.count_nonzero(robot.data.joint_vel) == 0
     # Smaller width only for this integration test; training config remains WEAVE 2048.
     policy = MultiCriticSimBaActorCritic(
         obs, {'policy': ['robot_proprio'], 'critic': ['robot_proprio']}, 41,

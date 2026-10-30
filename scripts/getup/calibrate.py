@@ -68,12 +68,14 @@ def main():
     robot = scene["robot"]
     root = robot.data.default_root_state.clone()
     q = robot.data.default_joint_pos.clone()
-    # Explicit provisional candidate: WEAVE joint pose rotated onto its back.
-    # Height/pose are NOT promoted to training defaults by this script.
+    # Supine uses the approved training seed; standing uses WEAVE defaults.
+    # CLI/JSON overrides are local to this diagnostic scene.
     if args.pose == "supine":
         pose_cfg = GetupPoseCfg()
         root[:, :3] = torch.tensor(pose_cfg.root_pos, device=sim.device)
         root[:, 3:7] = torch.tensor(pose_cfg.root_quat, device=sim.device)
+        for name, value in pose_cfg.seed_joint_pos.items():
+            q[:, robot.joint_names.index(name)] = value
     overrides = json.loads(args.pose_json.read_text()) if args.pose_json else {}
     if "root_pos" in overrides:
         root[:, :3] = torch.tensor(overrides["root_pos"], device=sim.device)

@@ -9,13 +9,15 @@ the Isaac Sim and Isaac Lab paths):
 ```bash
 source /data/g1_hoi_ws/sim51/bin/activate
 python scripts/getup/calibrate.py --pose standing --seconds 30 --output outputs/getup_calibration/standing
-python scripts/getup/calibrate.py --pose supine --hold-pose --root-height 0.06 --seconds 30 --output outputs/getup_calibration/supine_geometry
+python scripts/getup/calibrate.py --pose supine --hold-pose --seconds 30 --output outputs/getup_calibration/supine_geometry
 ```
 
-The supine candidate uses WEAVE's default joint pose rotated -90 degrees about
-world Y. Its root height of 0.06 m is a starting point for inspection, not an
-approved reset pose. The red sphere is the virtual head point; its default
-offset is derived from the URDF head COM, not an approved reward target.
+Supine uses the approved refined seed from `tasks/getup/pose_cfg.py`: root
+height 0.0595360173 m, its normalized wxyz quaternion, and 41 named active
+joint angles. Randomization is centered on this seed and mimic states are
+derived from their drivers. WEAVE's standing defaults, action offsets and
+relative-observation references are preserved. The red sphere is the virtual
+head point; head/height reward calibration remains provisional.
 
 `--hold-pose` rewrites the candidate every physics step. Use it only for visual
 geometry inspection. Remove it to observe the free base under gravity with
@@ -59,3 +61,68 @@ The subsequent integrated RL smoke test validates reset/history/timeout/PPO,
 but is not visual approval of either pose. Root pose now comes from the shared
 `tasks/getup/pose_cfg.py`; simulation dt, render interval and GPU patch capacity
 match WEAVE. Profiling flags `--profile` and `--no-marker` remain available.
+
+## Actual RL reset audit
+
+`audit_reset.py` calls the training environment's reset, checks state/history
+invariants and partial resets, saves still images, and runs four short dynamics
+cases. It adds a diagnostic contact sensor but does not edit training settings.
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+python scripts/getup/audit_reset.py --headless --num-envs 16 --samples 1024 --seconds 1 --output outputs/getup_reset_audit
+```
+
+Use a separate output directory for subsequent runs. `--no-images` skips still
+images. `analyze_reset_audit.py` analyzes source URDF collision geometry;
+`check_imported_collisions.py --usd PATH` additionally checks converted USD
+collision shapes and requires Isaac Sim's pxr libraries. Both geometry checks
+exclude PhysX cooking tolerances and contact/rest offsets; neither certifies
+absence of self-collision.
+
+The 2026-10-30 audit found initial ground overlap with the current 0.06 m root
+height, despite passing state invariants and short dynamics checks. See
+`outputs/getup_reset_audit/REPORT.md` for measured results and scope. No reset
+parameters were changed by this audit.
+
+## Per-joint sensitivity at root 0.074 m
+
+`sensitivity_reset.py` changes root height only in its diagnostic environment.
+It generates shared samples through the actual RL reset, then runs 41
+single-joint random tests, 41 deterministic scans, 21 leg groups, 41 paired
+restore-one-joint ablations, and baseline/full controls. Mimic states follow
+their drivers. It also runs 16 selected poses for 1 second holding their reset
+targets. Geometry uses imported USD colliders, with a numerical regression
+against the earlier independent USD audit.
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+python scripts/getup/sensitivity_reset.py --headless --root-height .074 --usd PATH_TO_CONVERTED_ROBOT_USD --output outputs/getup_reset_sensitivity_074_new
+python scripts/getup/report_sensitivity.py --output outputs/getup_reset_sensitivity_074_new
+```
+
+The output directory must not already exist. The recorded run is under
+`outputs/getup_reset_sensitivity_074`; its REPORT.md describes the scope,
+scan directions, group comparisons and paired ablation results. This test
+does not select new per-joint randomization ranges automatically.
+
+## Supine seed exploration
+
+The recorded `outputs/getup_supine_exploration/REPORT.md` compares unchanged
+baselines, a HoST-inspired mapped reference, three local solutions, and a
+refined solution using the current 68 imported USD collision shapes.
+`explore_supine.py` searches symmetric poses, anchoring height to posterior
+pelvis/torso geometry; `refine_supine.py` adds failure cases and range corners,
+then evaluates all candidates on a fresh shared 1024-sample table.
+`validate_supine_candidate.py` compares the refined pose and its five lowest
+random samples with baselines in PhysX. `report_supine.py` exports named full
+joint states, comparison plots, mapping information and force statistics.
+
+The refined candidate passed all 1024 fresh static geometry samples, but its
+short settling rollout has a larger peak torso contact force than baseline.
+It uses a flexed waist and posterior pelvis support. The user subsequently
+approved this refined pose as the training seed; the reset and calibration
+script now share it through `GetupPoseCfg.seed_joint_pos`. Historical reports
+describe the state before that promotion. Sampling success is not a proof over
+the continuous randomization domain. Exact candidate states are stored in
+`*_fresh.json`, with full joint order and schema in `fresh_results.json`.

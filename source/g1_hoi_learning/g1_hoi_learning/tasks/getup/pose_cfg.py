@@ -4,9 +4,52 @@ from isaaclab.utils import configclass
 
 @configclass
 class GetupPoseCfg:
-    root_pos: tuple = (0.0, 0.0, 0.06)
-    root_quat: tuple = (0.70710678, 0.0, -0.70710678, 0.0)  # wxyz
-    # Nominal joint angles are WEAVE's default_joint_pos, never a new action offset.
+    # Approved refined supine seed; independent of standing/action offsets.
+    root_pos: tuple = (0.0, 0.0, 0.05953601732234268)
+    root_quat: tuple = (0.7066905208230118, 0.0, -0.7075227966496206, 0.0)  # wxyz
+    seed_joint_pos: dict[str, float] = {
+        'left_hip_pitch_joint': -0.45000000000000007,
+        'right_hip_pitch_joint': -0.45000000000000007,
+        'waist_yaw_joint': 0.0,
+        'left_hip_roll_joint': 0.0,
+        'right_hip_roll_joint': 0.0,
+        'waist_roll_joint': 0.0,
+        'left_hip_yaw_joint': 0.0,
+        'right_hip_yaw_joint': 0.0,
+        'waist_pitch_joint': 0.39481580844104863,
+        'left_knee_joint': 0.45,
+        'right_knee_joint': 0.45,
+        'left_shoulder_pitch_joint': -0.1,
+        'right_shoulder_pitch_joint': -0.1,
+        'left_ankle_pitch_joint': -0.2,
+        'right_ankle_pitch_joint': -0.2,
+        'left_shoulder_roll_joint': 0.25,
+        'right_shoulder_roll_joint': -0.25,
+        'left_ankle_roll_joint': 0.0,
+        'right_ankle_roll_joint': 0.0,
+        'left_shoulder_yaw_joint': 0.0,
+        'right_shoulder_yaw_joint': 0.0,
+        'left_elbow_joint': 0.7999999999999997,
+        'right_elbow_joint': 0.7999999999999997,
+        'left_wrist_roll_joint': 0.0,
+        'right_wrist_roll_joint': 0.0,
+        'left_wrist_pitch_joint': 0.0,
+        'right_wrist_pitch_joint': 0.0,
+        'left_wrist_yaw_joint': 0.0,
+        'right_wrist_yaw_joint': 0.0,
+        'L_index_proximal_joint': 0.0,
+        'L_middle_proximal_joint': 0.0,
+        'L_pinky_proximal_joint': 0.0,
+        'L_ring_proximal_joint': 0.0,
+        'L_thumb_proximal_yaw_joint': 0.0,
+        'R_index_proximal_joint': 0.0,
+        'R_middle_proximal_joint': 0.0,
+        'R_pinky_proximal_joint': 0.0,
+        'R_ring_proximal_joint': 0.0,
+        'R_thumb_proximal_yaw_joint': 0.0,
+        'L_thumb_proximal_pitch_joint': 0.0,
+        'R_thumb_proximal_pitch_joint': 0.0,
+    }
     randomize_joints: bool = True
     joint_scale_range: tuple = (0.9, 1.1)
     joint_offset_range: tuple = (-0.1, 0.1)

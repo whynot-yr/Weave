@@ -11,6 +11,15 @@ class GetupState:
         self.drive = list(self.action._joint_ids)
         if self.robot.num_joints != 53 or len(self.drive) != 41:
             raise ValueError('Getup expects 53 state joints and 41 actions')
+        drive_names = [self.robot.joint_names[i] for i in self.drive]
+        if set(env.cfg.pose.seed_joint_pos) != set(drive_names):
+            raise ValueError('Supine seed must specify exactly the 41 active joint names')
+        self.seed_joint_pos = torch.tensor(
+            [env.cfg.pose.seed_joint_pos[name] for name in drive_names],
+            dtype=self.robot.data.default_joint_pos.dtype, device=env.device,
+        )
+        if not torch.isfinite(self.seed_joint_pos).all():
+            raise ValueError('Supine seed joint angles must be finite')
         self.history = torch.zeros(env.num_envs, 3, 154, device=env.device)
         self.pending = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         self.previous_velocity = torch.zeros(env.num_envs, 41, device=env.device)

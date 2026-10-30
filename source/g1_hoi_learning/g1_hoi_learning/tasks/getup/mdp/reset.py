@@ -14,6 +14,7 @@ def reset_supine(env, env_ids):
     root[:, 3:7] = quat / quat.norm()
     root[:, 7:] = 0
     q = robot.data.default_joint_pos[env_ids].clone()
+    q[:, state.drive] = state.seed_joint_pos
     limits = robot.data.joint_pos_limits[env_ids].clone()
     mimic = state.action.cfg.mimic
     for name, (driver, multiplier, offset) in mimic.items():
