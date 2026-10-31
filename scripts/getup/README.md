@@ -1,5 +1,65 @@
 # Getup pose calibration
 
+## Checkpoint evaluation and joint diagnostics
+
+From the repository root in the simulation environment:
+
+```bash
+python scripts/getup/eval.py \
+  --checkpoint outputs/2026-10-31_01-11-28_getup_2xa800_16k/model_2000.pt \
+  --num_envs 1 --episodes 1 --seed 42 \
+  --output outputs/getup_eval_model2000 --plots
+```
+
+The default is headless, deterministic policy inference with randomized training
+resets. `--episodes` is the total number across environments, must be at least
+`--num_envs`, and is allocated deterministically (e.g. 3 episodes on 2 environments
+means quotas 2 and 1). The output directory must be new. Compilation is disabled
+for evaluation and optimizer states are not loaded. Training settings are not edited.
+Use `env.pose.randomize_joints=False` for the nominal reset.
+
+For video append `--video --rendering_mode performance
+env.viewer.resolution='[640,480]'`. Video covers the evaluation loop and is saved
+under the output's `videos/`; data-only evaluation avoids rendering. With multiple
+environments, the default camera is not a tiled view and completed-quota environments
+may continue simulating while other environments finish; their extra episodes are
+excluded from the data and metrics. Progress is printed every 50 control steps.
+
+Outputs:
+
+- `metadata.json`, `env.yaml`, `agent.yaml`: joint order, active/mimic mapping,
+  checkpoint, seed, sampling rates, tolerances, effective evaluation configuration.
+- `rollout_envNNN_episodeNNNN.npz`: post-physics joint position/velocity, final
+  position targets (all 53 joints), computed/applied torque estimates, pelvis
+  height and episode-relative timestamps at 200 Hz. Runtime hard/soft position,
+  velocity and effort limits and initial joint/root states are stored in each file.
+  Control timestamps, consecutive success steps and latched success use 50 Hz.
+- `joint_summary.csv`: per-episode, per-joint extrema, tracking errors, hard/soft
+  position and target-position exceedances, velocity exceedances, sampled duration,
+  first occurrence, and estimated torque saturation fraction.
+- `episodes.csv`, `metrics.json`: success and final-hold rates, end causes, maximum
+  hold streak, final/max pelvis height, completion flags and sample counts.
+- `plots/` (with `--plots`): all 53 joints' angle/target/limits and velocity/limits,
+  plus pelvis height. Position red lines are hard limits, orange dashed lines soft.
+
+The physics recorder callback runs before Isaac Lab updates ArticulationData caches;
+fresh state is read directly from the PhysX view. Control-step results are captured
+after reward/success evaluation and before automatic reset, preserving terminal
+states. Time zero is stored separately; it is excluded from sampled durations.
+Raw excess is always retained. Default reporting tolerances are `1e-4` rad for
+position and `1e-3` rad/s for velocity, configurable with `--position_tolerance`
+and `--velocity_tolerance`. Durations are sample counts times physics dt; no claim
+is made about inter-sample continuous-time extrema. Saturation means estimated
+computed torque magnitude reaches the runtime effort limit. Implicit actuator
+torques are PD estimates for the just-applied substep, not measured PhysX forces.
+
+Success still requires pelvis strictly above 0.76 m for 50 control steps; success
+does not terminate the episode. `time_out` and `success=true` can coexist. Evaluation
+does not add action clipping or change reward/termination rules. Partial episodes
+on interruption are marked incomplete and excluded from completed success rates.
+
+## Standalone pose inspection
+
 This standalone scene reuses WEAVE's robot, actuators, ground, and mimic mapping.
 It does not register a training task or modify training defaults.
 
