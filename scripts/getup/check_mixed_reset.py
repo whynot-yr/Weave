@@ -57,6 +57,8 @@ def main():
  # Completion statistics must belong to the episode that ended, not its newly sampled seed.
  for i,name in enumerate(s.seed_names):cfg.pose.reset_mode=name;env._reset_idx(ids[i:i+1])
  cfg.pose.reset_mode='mixed';env.pop_seed_statistics()
+ env.reset_terminated=torch.zeros(16,dtype=torch.bool,device=env.device)
+ env.reset_time_outs=torch.zeros_like(env.reset_terminated)
  env.episode_length_buf[:2]=torch.tensor([3,7],device=env.device);env.reset_time_outs[:2]=True
  s.success[:2]=torch.tensor([True,False],device=env.device);s.success_steps[:2]=torch.tensor([s.required_steps,0],device=env.device)
  env.reward_manager.group_sums[:2]=torch.tensor([[1.,2.,3.,4.],[10.,20.,30.,40.]],device=env.device)
@@ -67,4 +69,8 @@ def main():
  result.update(partial_reset_passed=True,reproducibility_passed=True,old_seed_attribution_passed=True,observations=462)
  (a.output/'result.json').write_text(json.dumps(result,indent=2));env.close();print('[MIXED CHECK] PASSED',result,flush=True)
 try:main()
+except Exception:
+ import traceback
+ traceback.print_exc()
+ raise
 finally:SimulationContext.clear_instance();app.close(wait_for_replicator=False)

@@ -1,5 +1,53 @@
 # Getup pose calibration
 
+## Mixed-seed reset (current default)
+
+`env.pose.reset_mode=mixed` independently samples each reset environment with
+`env.pose.prone_probability=0.5`. Supine and prone each have a complete named
+root pose and 41-joint seed under `env.pose.supine` and `env.pose.prone`.
+There is no waiting window. Joint perturbations, mimic rules, zero initial
+velocities, WEAVE action offsets, 462D observations, rewards and PPO settings
+are unchanged. Seed IDs are episode bookkeeping only and are not observations.
+
+Use these Hydra overrides on the normal train/eval command:
+
+```text
+env.pose.reset_mode=mixed env.pose.prone_probability=0.5
+env.pose.reset_mode=supine
+env.pose.reset_mode=prone
+```
+
+For nominal evaluation, also pass `env.pose.randomize_joints=False`.
+Calibration supports `--pose supine` and `--pose prone`; the legacy single-seed
+audit supports `--seed-pose supine` or `--seed-pose prone`. Direct overrides of
+the old `env.pose.root_pos` or `env.pose.seed_joint_pos` must now target the
+appropriate named seed, e.g. `env.pose.supine.root_pos`.
+
+Training still delegates to the native RSL-RL rollout/update/checkpoint code.
+A Getup-only logging adapter sums reset counts, completed-episode counts,
+success/final-hold counts, lengths and four reward returns across ranks at
+each PPO update boundary. It writes `Seed/supine/*` and `Seed/prone/*` scalars.
+Ratios are computed after summing counts; there are no collectives inside
+asynchronous resets. Empty groups emit counts but no fabricated success rate.
+Statistics refer to the episode's original seed, even if the robot flips over.
+Manual resets of unfinished episodes are excluded from completion statistics.
+
+Verification commands:
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+python scripts/getup/check_mixed_reset.py --headless --output outputs/getup_mixed_reset_new
+python scripts/getup/check_seed_logging.py
+python scripts/getup/smoke.py --headless --output outputs/getup_mixed_smoke_new
+```
+
+The first check validates 1024 actual resets per seed, 2048 mixed resets,
+history isolation, reproducibility and old-seed attribution. The logging test
+uses two CPU processes (Gloo), including a rank with no episodes of one seed.
+The smoke checks both initial poses, timeout/history handling and a native
+PPO update/checkpoint cycle. Prone's documented elbow clipping, soft-limit
+penalties and immediate zero-action transients remain intentionally unchanged.
+
 ## Checkpoint evaluation and joint diagnostics
 
 From the repository root in the simulation environment:
@@ -182,7 +230,7 @@ The refined candidate passed all 1024 fresh static geometry samples, but its
 short settling rollout has a larger peak torso contact force than baseline.
 It uses a flexed waist and posterior pelvis support. The user subsequently
 approved this refined pose as the training seed; the reset and calibration
-script now share it through `GetupPoseCfg.seed_joint_pos`. Historical reports
+script now share it through `GetupPoseCfg.supine.seed_joint_pos`. Historical reports
 describe the state before that promotion. Sampling success is not a proof over
 the continuous randomization domain. Exact candidate states are stored in
 `*_fresh.json`, with full joint order and schema in `fresh_results.json`.

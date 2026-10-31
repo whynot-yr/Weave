@@ -8,6 +8,11 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'source/g1_hoi_learnin
 from seed_logging import reduce_seed_statistics,seed_metrics
 
 def worker(rank,init_file):
+ # This environment's Torch 2.14 wheel omits builtin backend entry-point metadata.
+ # Register its shipped Gloo backend for this CPU-only test, without editing the install.
+ from torch.distributed import distributed_c10d as c10d
+ if hasattr(c10d, '_register_builtin_gloo_backend') and 'GLOO' not in dist.Backend._plugins:
+  c10d._register_builtin_gloo_backend()
  dist.init_process_group('gloo',init_method='file://'+init_file,rank=rank,world_size=2)
  x=torch.zeros(2,9,dtype=torch.float64)
  if rank==0:x[0]=torch.tensor([3,3,1,1,30,3,6,9,12])

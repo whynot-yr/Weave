@@ -16,8 +16,12 @@ class GetupEnv(ManagerBasedRLEnv):
             return
         state = get_state(self)
         # Attribute terminal transitions to the OLD seed before reset changes it.
-        completed = (self.episode_length_buf[env_ids] > 0) & (
-            self.reset_terminated[env_ids] | self.reset_time_outs[env_ids])
+        completed = self.episode_length_buf[env_ids] > 0
+        # Isaac Lab creates these masks only after the first physics step.
+        if hasattr(self, 'reset_terminated') and hasattr(self, 'reset_time_outs'):
+            completed &= self.reset_terminated[env_ids] | self.reset_time_outs[env_ids]
+        else:
+            completed.zero_()
         old_seed = state.episode_seed_id[env_ids]
         for seed_id in range(2):
             ids = env_ids[completed & (old_seed == seed_id)]
