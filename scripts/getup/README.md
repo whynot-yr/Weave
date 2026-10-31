@@ -187,6 +187,30 @@ describe the state before that promotion. Sampling success is not a proof over
 the continuous randomization domain. Exact candidate states are stored in
 `*_fresh.json`, with full joint order and schema in `fresh_results.json`.
 
+## Prone exploration (2026-11-01)
+
+The final comparison is in `outputs/getup_prone_refined/REPORT.md`.
+`explore_prone.py` screens HoST-inspired and flipped-supine references and
+locally optimized candidates. `search_prone_arms.py` searches separated arm
+poses; `refine_prone_arms.py` refines a lower-arm candidate against failures
+and range corners. `finalize_prone.py` evaluates all shortlisted candidates
+with a fresh shared random table. Offline geometry scripts require Isaac
+Sim's pxr library paths; use `OPENBLAS_NUM_THREADS=1` to avoid excessive BLAS
+threading. Prior supine audit metadata and joint limits are reused explicitly.
+
+```bash
+source /data/g1_hoi_ws/sim51/bin/activate
+python scripts/getup/validate_prone.py --headless --output outputs/getup_prone_refined
+python scripts/getup/report_prone.py --output outputs/getup_prone_refined
+```
+
+The validation command writes screenshots, trajectories and contact data in
+the chosen directory and overwrites same-name validation artifacts. It tests
+hold-seed and zero-action controls separately for one second. The final
+`refined_arms` candidate passed 1024 independent static samples, but elbow
+clipping, zero-action transients and possible head contact remain documented
+limitations. The formal supine training seed is not changed by this workflow.
+
 ## Torque audit
 
 Append `--torque-audit` to `scripts/getup/eval.py` to capture post-physics
