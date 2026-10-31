@@ -16,6 +16,7 @@ parser.add_argument('--episodes', type=int, default=1, help='Total episodes, dis
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--output', type=Path, required=True, help='New output directory; existing directories are refused.')
 parser.add_argument('--video', action='store_true')
+parser.add_argument('--torque-audit', action='store_true', help='Capture solver efforts and export per-episode torque audits.')
 parser.add_argument('--plots', action='store_true', help='Save plots of all joint positions/velocities and pelvis height.')
 parser.add_argument('--position_tolerance', type=float, default=1e-4, help='Radians; raw excess is always retained.')
 parser.add_argument('--velocity_tolerance', type=float, default=1e-3, help='Radians/second.')
@@ -88,7 +89,7 @@ def main(env_cfg, agent_cfg):
         runner.alg.policy.reset()
         raw = env.unwrapped
         recorder = raw.getup_eval_recorder
-        recorder.start(output, args.episodes, args.position_tolerance, args.velocity_tolerance, args.plots)
+        recorder.start(output, args.episodes, args.position_tolerance, args.velocity_tolerance, args.plots, args.torque_audit)
         metadata = dict(checkpoint=str(Path(checkpoint).resolve()), seed=env_cfg.seed,
                         num_envs=env.num_envs, requested_episodes=args.episodes,
                         joint_names=recorder.names, drive_joint_names=list(raw.action_manager.get_term('joint_pos')._joint_names),

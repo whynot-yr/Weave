@@ -186,3 +186,52 @@ script now share it through `GetupPoseCfg.seed_joint_pos`. Historical reports
 describe the state before that promotion. Sampling success is not a proof over
 the continuous randomization domain. Exact candidate states are stored in
 `*_fresh.json`, with full joint order and schema in `fresh_results.json`.
+
+## Torque audit
+
+Append `--torque-audit` to `scripts/getup/eval.py` to capture post-physics
+`get_dof_projected_joint_forces()` and `get_dof_actuation_forces()` at 200 Hz.
+The normal episode length remains 10 seconds; early termination or interruption
+is retained and reported, never padded or concatenated into a fictitious episode.
+The NPZ retains both new channels plus the original actuator estimates.
+An unavailable/nonfinite solver channel is filled with NaN, with the error stored
+in `torque_capture_metadata.json`. Subsequent reads of a failed channel are skipped.
+
+Each episode exports `torque_summary.csv`, `torque_timeseries.csv`,
+`torque_utilization.png`, `torque_saturation.png`, `joint_limit_torque.png`, and
+`torque_audit_metadata.json` under `torque_audit/` (episode subdirectories for
+multiple requested episodes). The summary has one row per joint, including mimic
+joints. Joint plots cover all joints. The time series retains every physics sample.
+
+Existing recordings can be audited without starting the simulator:
+
+```bash
+python scripts/getup/torque_audit.py \
+  outputs/getup_eval_model2000_run2/rollout_env000_episode0000.npz \
+  --output outputs/getup_eval_model2000_run2/torque_audit
+```
+
+`requested_*` and `output_*` describe the actuator's pre/post-clipping values.
+For implicit actuators these are PD estimates; for explicit actuators the latter
+is a command, not a torque measurement. The source is recorded per joint. Old
+recordings without actuator metadata conservatively use estimate semantics.
+`solver_projected_*` describes projected joint effort, which may contain constraint
+contributions and is NOT promoted to isolated motor output. Actuation-force readback
+is also retained separately. Until a separate physical validation establishes an
+isolated motor source, `actual_*` columns are blank and `torque_status` and
+`combined_status` remain unknown. No CLI switch can relabel estimates as measured.
+
+Output saturation uses `abs(output) >= limit - max(1e-4 Nm, 0.001*limit)`;
+near saturation is strictly above 95% utilization and includes saturation.
+Request exceedance uses the same tolerance above the limit. Ratios use all samples;
+incomplete channels yield blank aggregates with valid fractions reported.
+`output_joint_classification` is explicitly an estimate/command-based diagnostic,
+using actual HARD position violations. It distinguishes simultaneous events from
+events at different times. Soft and target violations have independent columns.
+Near-limit margin means distance <= 0.001 rad and maximum utilization <= 80%
+during those samples. Saturation alone does not establish torque insufficiency.
+A solver observation above the effort cap does not prove motor overload.
+
+Runtime solver API availability and isolated drive-force interpretation require
+simulation validation (free motion, effort-limited drive, joint stop, and external
+loading with drive disabled). Offline tests do not establish these properties.

@@ -6,6 +6,7 @@ import numpy as np
 from isaaclab.managers.recorder_manager import RecorderTerm
 
 from eval_diagnostics import joint_summary, plot_episode, write_csv
+from torque_audit import write_audit
 
 
 class JointRolloutRecorder(RecorderTerm):
@@ -15,7 +16,7 @@ class JointRolloutRecorder(RecorderTerm):
         super().__init__(cfg, env)
         env.getup_eval_recorder = self
 
-    def start(self, output, episodes, position_tolerance, velocity_tolerance, plots):
+    def start(self, output, episodes, position_tolerance, velocity_tolerance, plots, torque_audit=False):
         self.output = Path(output)
         self.robot = self._env.scene['robot']
         self.names = list(self.robot.joint_names)
@@ -27,6 +28,15 @@ class JointRolloutRecorder(RecorderTerm):
         self.results, self.summary = [], []
         self.position_tolerance, self.velocity_tolerance = position_tolerance, velocity_tolerance
         self.plots = plots
+        self.torque_audit = torque_audit
+        self.solver_capture_errors = {}
+        self.actuator_joint_info = {}
+        for actuator in self.robot.actuators.values():
+            indices = actuator.joint_indices
+            ids = list(range(len(self.names)))[indices] if isinstance(indices, slice) else list(indices)
+            for j in ids:
+                self.actuator_joint_info[self.names[j]] = dict(
+                    class_type=type(actuator).__name__, is_implicit=bool(actuator.is_implicit_model))
         self.dt = self._env.physics_dt
         d = self.robot.data
         self.limits = {k: v.detach().cpu().numpy().copy() for k, v in {
@@ -54,6 +64,23 @@ class JointRolloutRecorder(RecorderTerm):
             'computed_torque': d.computed_torque, 'applied_torque': d.applied_torque,
             'pelvis_height': view.get_root_transforms()[:, 2]-self._env.scene.env_origins[:, 2],
         }.items()}
+        if self.torque_audit:
+            # Post-integration solver observations; neither channel is silently
+            # interpreted as the isolated implicit-drive motor torque.
+            for key, method in [('solver_projected_joint_effort', 'get_dof_projected_joint_forces'),
+                                ('dof_actuation_force', 'get_dof_actuation_forces')]:
+                if key in self.solver_capture_errors:
+                    arrays[key] = np.full_like(arrays['joint_pos'], np.nan)
+                    continue
+                try:
+                    values = getattr(view, method)().detach().cpu().numpy().copy()
+                    if values.shape != arrays['joint_pos'].shape or not np.isfinite(values).all():
+                        raise ValueError(f'Invalid shape or nonfinite solver data: {values.shape}')
+                    arrays[key] = values
+                except Exception as exc:
+                    self.solver_capture_errors[key] = f'{type(exc).__name__}: {exc}'
+                    print(f'[TORQUE] {key} unavailable: {exc}', flush=True)
+                    arrays[key] = np.full_like(arrays['joint_pos'], np.nan)
         for i, quota in enumerate(self.quotas):
             if self.completed[i] < quota:
                 self.physics[i].append({k: v[i].copy() for k, v in arrays.items()})
@@ -121,6 +148,18 @@ class JointRolloutRecorder(RecorderTerm):
                 s = self._env.getup_state
                 self._save(i, False, bool(s.success[i]), int(s.success_steps[i]), ['interrupted'])
         self.enabled = False
+        if self.torque_audit:
+            capture = dict(actuator_joint_info=self.actuator_joint_info,
+                           solver_capture_errors=self.solver_capture_errors)
+            (self.output/'torque_capture_metadata.json').write_text(json.dumps(capture, indent=2))
+            meta = json.loads((self.output/'metadata.json').read_text())
+            meta.update(capture)
+            for row in self.results:
+                destination = self.output/'torque_audit'
+                if sum(self.quotas) > 1:
+                    destination = destination/Path(row['file']).stem
+                with np.load(self.output/row['file']) as data:
+                    write_audit(data, dict(meta, episode_result=row), destination)
         if self.plots:
             for row in self.results:
                 with np.load(self.output/row['file']) as data:
