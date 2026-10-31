@@ -1,4 +1,4 @@
-"""Numerical multi-critic and history checks without starting Isaac Sim."""
+"""Numerical single-critic and history checks without starting Isaac Sim."""
 import ast
 import importlib.util
 import sys
@@ -28,30 +28,28 @@ def modules(monkeypatch):
         return mod
     for suffix in ('algorithms.networks', 'algorithms.optimizers', 'algorithms.ppo.networks', 'algorithms.ppo.algorithm'):
         load(suffix)
-    return SimpleNamespace(storage=load('algorithms.ppo.multi_critic_storage'),
-                           network=load('algorithms.ppo.multi_critic_networks'),
+    return SimpleNamespace(network=load('algorithms.ppo.multi_critic_networks'),
                            algorithm=load('algorithms.ppo.multi_critic_algorithm'))
 
 
-def test_group_gae_and_weights(modules):
-    obs = TensorDict({'robot_proprio': torch.zeros(2, 462)}, batch_size=[2])
-    storage = modules.storage.MultiCriticRolloutStorage('rl', 2, 2, obs, [41], reward_group_weights=[2.5,1,.1,1])
+def test_scalar_gae_and_weights(modules):
+    obs, policy = make_policy(modules)
+    alg = modules.algorithm.MultiCriticMuonPPO(policy, device='cpu')
+    alg.init_storage('rl', 2, 2, obs, [41])
+    from rsl_rl.storage import RolloutStorage
+    storage = alg.storage
+    assert type(storage) is RolloutStorage
+    assert storage.values.shape == (2, 2, 1)
     storage.step = 2
-    storage.values[:] = 0
-    storage.rewards[0] = torch.tensor([[1,2,3,4],[2,4,6,8.]])
-    storage.rewards[1] = torch.tensor([[3,6,9,12],[4,8,12,16.]])
+    groups = torch.tensor([[[1.,2,3,4],[2,4,6,8]], [[3,6,9,12],[4,8,12,16]]])
+    storage.rewards.copy_((groups * torch.tensor([2.5,1,.1,1])).sum(-1, keepdim=True))
     storage.dones[0, 0] = 1
-    storage.compute_returns(torch.zeros(2,4), gamma=.9, lam=.8)
+    storage.compute_returns(torch.zeros(2,1), gamma=.9, lam=.8)
     expected = storage.rewards.clone()
     expected[0,1] += .9*.8*expected[1,1]
     torch.testing.assert_close(storage.returns, expected)
-    normalized = (expected-expected.mean((0,1)))/(expected.std((0,1))+1e-8)
-    torch.testing.assert_close(storage.advantages, (normalized*torch.tensor([2.5,1,.1,1])).sum(-1,keepdim=True))
-    # Changing only style must leave all other return targets unchanged.
-    before = storage.returns.clone()
-    storage.rewards[...,1] += 7
-    storage.compute_returns(torch.zeros(2,4), .9, .8)
-    torch.testing.assert_close(storage.returns[..., [0,2,3]], before[..., [0,2,3]])
+    normalized = (expected-expected.mean())/(expected.std()+1e-8)
+    torch.testing.assert_close(storage.advantages, normalized)
 
 
 def make_policy(modules):
@@ -65,12 +63,11 @@ def make_policy(modules):
     return obs, policy
 
 
-def test_critics_have_independent_gradients(modules):
+def test_single_critic_has_independent_gradients(modules):
     obs, policy = make_policy(modules)
-    assert policy.evaluate(obs).shape == (2,4)
+    assert policy.evaluate(obs).shape == (2,1)
     policy.evaluate(obs)[:, 0].sum().backward()
-    assert any(p.grad is not None and p.grad.abs().sum()>0 for p in policy.critic[0].parameters())
-    assert all(p.grad is None or p.grad.count_nonzero()==0 for c in policy.critic[1:] for p in c.parameters())
+    assert any(p.grad is not None and p.grad.abs().sum()>0 for p in policy.critic.parameters())
     assert all(p.grad is None for p in policy.actor.parameters())
 
 
@@ -81,13 +78,37 @@ def test_timeout_uses_terminal_value_only(modules):
     alg.act(obs)
     terminal = TensorDict({'robot_proprio': torch.full((2,462), .75)}, batch_size=[2])
     expected = policy.evaluate(terminal).detach()
-    rewards = torch.ones(2,4)
-    alg.process_env_step(obs, torch.zeros(2), torch.ones(2), {
-        'reward_groups':rewards, 'bootstrap_timeouts':torch.tensor([True,False]),
+    rewards = torch.tensor([3., 7.])
+    alg.process_env_step(obs, rewards, torch.ones(2), {
+        'reward_groups':torch.full((2,4), 99.), 'time_outs':torch.ones(2), 'bootstrap_timeouts':torch.tensor([True,False]),
         'terminal_proprio':terminal['robot_proprio'],
     })
     torch.testing.assert_close(alg.storage.rewards[0,0], rewards[0]+.9*expected[0])
-    torch.testing.assert_close(alg.storage.rewards[0,1], rewards[1])
+    torch.testing.assert_close(alg.storage.rewards[0,1], rewards[1:2])
+
+
+def test_single_critic_ppo_update_and_restore(modules):
+    obs, policy = make_policy(modules)
+    alg = modules.algorithm.MultiCriticMuonPPO(
+        policy, device='cpu', num_learning_epochs=1, num_mini_batches=1,
+        normalize_advantage_per_mini_batch=False,
+    )
+    alg.init_storage('rl', 2, 2, obs, [41])
+    before = [p.detach().clone() for p in policy.critic.parameters()]
+    with torch.inference_mode():
+        for step in range(2):
+            alg.act(obs)
+            alg.process_env_step(obs, torch.tensor([1., 3.]) + step, torch.zeros(2), {
+                'bootstrap_timeouts': torch.zeros(2, dtype=torch.bool),
+            })
+        alg.compute_returns(obs)
+    metrics = alg.update()
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+    assert any(not torch.equal(old, new) for old, new in zip(before, policy.critic.parameters()))
+    _, restored = make_policy(modules)
+    restored.load_state_dict(policy.state_dict())
+    torch.testing.assert_close(restored.act_inference(obs), policy.act_inference(obs))
+    torch.testing.assert_close(restored.evaluate(obs), policy.evaluate(obs))
 
 
 def test_history_and_continuous_success():

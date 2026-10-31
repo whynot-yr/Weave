@@ -5,7 +5,6 @@ from g1_hoi_learning.tasks.hoi.agents.rsl_rl_ppo_cfg import PPORunnerCfg, MuonPp
 @configclass
 class MultiCriticAlgorithmCfg(MuonPpoAlgorithmCfg):
     class_name: str = 'MultiCriticMuonPPO'
-    reward_group_weights: tuple = (2.5, 1., .1, 1.)
     normalize_advantage_per_mini_batch: bool = False
 
 

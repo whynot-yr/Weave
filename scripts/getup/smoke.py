@@ -57,7 +57,9 @@ def main():
     ).to(env.device)
     alg = MultiCriticMuonPPO(policy, device=env.device, num_learning_epochs=1, num_mini_batches=1,
                             entropy_coef=.01, normalize_advantage_per_mini_batch=False)
+    assert policy.evaluate(obs).shape == (2, 1)
     alg.init_storage('rl', 2, 2, obs, [41])
+    assert alg.storage.values.shape == (2, 2, 1)
     with torch.inference_mode():
         for i in range(2):
             action = alg.act(obs)

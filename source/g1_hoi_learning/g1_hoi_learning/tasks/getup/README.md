@@ -14,8 +14,8 @@ phase state machine, external pushes, or extra dynamics randomization are used.
 - History is explicitly owned by `GetupState`, rather than ObservationManager's
   history. This allows terminal snapshots before auto-reset without advancing
   history twice during logging or observation queries.
-- Actor and four independent critics: MLP `462 -> 256 -> 256` (SiLU), WEAVE SimBa
-  width 2048, two blocks, expansion 1. Critic outputs concatenate to `[N,4]`.
+- Actor and one independent critic: MLP `462 -> 256 -> 256` (SiLU), WEAVE SimBa
+  width 2048, two blocks, expansion 1. Critic output is `[N,1]`.
 - Action: 41D diagonal Gaussian, initial std 0.8. WEAVE's default offset and
   scale 1.0 are retained. Reset does not change the default joint offsets.
 - Reset: root `(0,0,0.06)` plus environment origin, quaternion wxyz
@@ -37,21 +37,25 @@ Post uses a separate pelvis-height gate. Head height is relative to the average
 of the two ankle-roll link origins, not world height or sole height.
 
 Task is per-step, without dt; all other groups multiply control dt **once**.
-Each critic learns its unweighted group return. GAE is computed per group,
-standardized over the rollout per group, then actor advantage is weighted by
-`[2.5,1,0.1,1]`. No second advantage normalization. Value losses average over
-batch and four critics; optimizer, clipping, KL adaptation follow WEAVE.
-RND, symmetry augmentation and recurrent policies are intentionally unsupported
-in this V1 multi-critic class.
+The environment combines the four groups using `cfg.advantage_weights`
+(default `[2.5,1,0.1,1]`). PPO consumes this scalar reward and the single critic
+learns its total return. Native RSL-RL storage computes scalar GAE and normalizes
+advantage once over the rollout. Optimizer, clipping and KL adaptation follow
+WEAVE. RND, symmetry augmentation and recurrent policies remain unsupported.
 
-The scalar reward is the weighted sum for runner logging. PPO consumes
-`extras['reward_groups']`. Timeout bootstrap uses the captured **terminal**
+The legacy `MultiCriticSimBaActorCritic` and `MultiCriticMuonPPO` names are retained
+for configuration compatibility, but now use the original single-critic network
+and storage. `multi_critic_storage.py` is unused. Four-critic checkpoints cannot
+be resumed directly with this architecture; start a new training run.
+
+`extras['reward_groups']` remains available for diagnostics.
+Timeout bootstrap uses the captured **terminal**
 462D observation, not reset observations; real failures suppress bootstrapping,
 even if timeout happens in the same step.
 
 Logs include individual terms (Isaac Lab episode normalization), raw group
-returns (`Getup_Return/*`), episode/final-hold success, and pre-update value MSE
-and explained variance per critic. Term time scales are already applied in the
+returns (`Getup_Return/*`), episode/final-hold success, and aggregate value loss
+and explained variance. Term time scales are already applied in the
 custom manager; never apply dt a second time outside it.
 
 ## Pending calibration
@@ -102,7 +106,15 @@ task only. Play uses the existing `scripts/rsl_rl/play.py` with this task ID and
 the getup checkpoint. Exported actor input is 462D; the caller must maintain the
 same history order and default-offset action mapping.
 
-## Verified implementation checks
+## Single-critic validation
+
+Seven CPU regression tests pass, covering scalar GAE, critic gradients, terminal
+bootstrap, PPO update and policy restore, history, reward time scaling, and
+normalizer checkpoint reload. Isaac Sim smoke was attempted but could not start
+because the current Python environment could not import `isaacsim`; simulation
+integration and training convergence have not been verified for this switch.
+
+## Historical implementation checks (before the single-critic switch)
 
 - Six CPU regression tests pass: group GAE/weights, independent critic gradients,
   timeout terminal-value bootstrap, history/continuous success, mixed reward dt
