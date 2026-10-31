@@ -120,36 +120,50 @@ def write_audit(data, meta, output, plots=True):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(int(np.ceil(len(names)/3)), 3, figsize=(18, 2.2*np.ceil(len(names)/3)), squeeze=False)
-    for j, ax in enumerate(axes.flat):
-        if j >= len(names): ax.set_visible(False); continue
-        cap = caps[j]
-        if np.isfinite(cap) and cap > 0:
-            ax.plot(t, abs(data['applied_torque'][:,j])/cap, lw=.6)
-        ax.axhline(.95, color='orange', ls='--', lw=.6); ax.axhline(1, color='red', lw=.6)
-        ax.set(title=names[j], xlabel='s', ylabel='Output / limit'); ax.grid(alpha=.2)
-    fig.suptitle('Actuator output utilization: implicit estimates / explicit commands; NOT measured motor torque')
-    fig.tight_layout(rect=(0,0,1,.99)); fig.savefig(output/'torque_utilization.png', dpi=110); plt.close(fig)
+    def draw_torque(ax, j):
+        for key, label in [('computed_torque', 'requested (estimate/command)'),
+                           ('applied_torque', 'output (estimate/command)')]:
+            ax.plot(t, data[key][:, j], label=label, lw=.7)
+        if np.isfinite(solver[:, j]).any():
+            ax.plot(t, solver[:, j], label='solver projected', lw=.7)
+        for bound in [-caps[j], caps[j]]:
+            ax.axhline(bound, color='red', lw=.7)
+        ax.set(title=names[j], xlabel='seconds', ylabel='Nm')
+        ax.grid(alpha=.2)
+        ax.legend(fontsize=7)
+
+    for start in range(0, len(names), 9):
+        for kind in ('torque', 'torque_utilization'):
+            fig, axes = plt.subplots(3, 3, figsize=(15, 10), squeeze=False)
+            for offset, ax in enumerate(axes.flat):
+                j = start + offset
+                if j >= len(names):
+                    ax.set_visible(False)
+                    continue
+                if kind == 'torque':
+                    draw_torque(ax, j)
+                else:
+                    cap = caps[j]
+                    if np.isfinite(cap) and cap > 0:
+                        ax.plot(t, abs(data['applied_torque'][:, j])/cap, lw=.7)
+                    ax.axhline(.95, color='orange', ls='--', lw=.7)
+                    ax.axhline(1, color='red', lw=.7)
+                    ax.set(title=names[j], xlabel='seconds', ylabel='Output / limit')
+                    ax.grid(alpha=.2)
+            fig.suptitle('Actuator estimates/commands; solver projection is not isolated motor torque', fontsize=10)
+            fig.tight_layout(rect=(0, 0, 1, .97))
+            fig.savefig(output/f'{kind}_{start:02d}.png', dpi=120)
+            plt.close(fig)
     fig, ax = plt.subplots(figsize=(15, max(6, len(names)*.22)))
     ax.imshow(sat.T, aspect='auto', interpolation='nearest', extent=(t[0]-meta['physics_dt'], t[-1], len(names)-.5, -.5), vmin=0, vmax=1, cmap='Greys')
     ax.set_yticks(range(len(names)), names, fontsize=7)
     ax.set(xlabel='Time (s)', title='Output saturation (estimate/command only); actual motor saturation UNKNOWN')
     fig.tight_layout(); fig.savefig(output/'torque_saturation.png', dpi=140); plt.close(fig)
-    # All joints, not only a selected subset, for reproducible joint/torque comparisons.
-    fig, axes = plt.subplots(len(names), 2, figsize=(16, len(names)*1.7), squeeze=False)
-    for j, name in enumerate(names):
-        ax, bx = axes[j]; ax.plot(t, q[:,j], label='actual position', lw=.7)
-        ax.plot(t, data['joint_target'][:,j], label='target', lw=.6, alpha=.7)
-        for b in data['limit_position'][j]: ax.axhline(b, color='red', lw=.5)
-        for b in data['limit_soft_position'][j]: ax.axhline(b, color='orange', ls='--', lw=.5)
-        ax.set(title=name, ylabel='rad')
-        for key, label in [('computed_torque','requested'), ('applied_torque','output')]:
-            bx.plot(t, data[key][:,j], label=label, lw=.6)
-        if np.isfinite(solver[:,j]).any(): bx.plot(t, solver[:,j], label='solver projected', lw=.6)
-        for b in [-caps[j], caps[j]]: bx.axhline(b, color='red', lw=.5)
-        bx.set(ylabel='Nm (sources distinct)')
-        for a in (ax,bx): a.legend(fontsize=6, loc='upper right'); a.grid(alpha=.2); a.set_xlabel('s')
-    fig.tight_layout(); fig.savefig(output/'joint_limit_torque.png', dpi=80); plt.close(fig)
+    # Retire the old joint-position/torque layouts after torque pages are saved.
+    old_names = ['joint_limit_torque.png', 'torque_utilization.png']
+    old_names += [f'joint_limit_torque_{start:02d}.png' for start in range(0, len(names), 3)]
+    for old_name in old_names:
+        (output/old_name).unlink(missing_ok=True)
     return rows
 
 

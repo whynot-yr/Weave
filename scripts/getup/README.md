@@ -198,10 +198,13 @@ An unavailable/nonfinite solver channel is filled with NaN, with the error store
 in `torque_capture_metadata.json`. Subsequent reads of a failed channel are skipped.
 
 Each episode exports `torque_summary.csv`, `torque_timeseries.csv`,
-`torque_utilization.png`, `torque_saturation.png`, `joint_limit_torque.png`, and
+`torque_XX.png`, `torque_utilization_XX.png`, `torque_saturation.png`, and
 `torque_audit_metadata.json` under `torque_audit/` (episode subdirectories for
 multiple requested episodes). The summary has one row per joint, including mimic
-joints. Joint plots cover all joints. The time series retains every physics sample.
+joints. Torque and utilization pages use 3x3 grids (9 joints), directly from
+the full NPZ time series. Torque audit plots contain no joint-position panels.
+XX is the zero-based starting joint index, matching position plot naming.
+The time series retains every physics sample.
 
 Existing recordings can be audited without starting the simulator:
 
