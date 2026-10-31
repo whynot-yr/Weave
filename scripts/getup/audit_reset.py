@@ -10,6 +10,7 @@ parser.add_argument('--num-envs',type=int,default=16)
 parser.add_argument('--samples',type=int,default=1024)
 parser.add_argument('--seconds',type=float,default=1.)
 parser.add_argument('--no-images',action='store_true')
+parser.add_argument('--seed-pose', choices=['supine', 'prone'], default='supine')
 AppLauncher.add_app_launcher_args(parser)
 args=parser.parse_args()
 if not args.no_images:
@@ -36,6 +37,7 @@ def main():
     torch.set_num_threads(4)
     args.output.mkdir(parents=True,exist_ok=True)
     cfg=GetupEnvCfg()
+    cfg.pose.reset_mode=args.seed_pose
     cfg.scene.num_envs=args.num_envs
     cfg.sim.device=args.device
     cfg.pose.randomize_joints=False
@@ -88,9 +90,9 @@ def main():
         for name,(driver,m,b) in state.action.cfg.mimic.items():
             mimic_error=max(mimic_error,float(np.abs(q[:,state.joint_ids[name]]-q[:,state.joint_ids[driver]]*m-b).max()))
         obs=env.observation_manager.compute()['robot_proprio'].reshape(env.num_envs,3,154)
-        expected=torch.tensor(cfg.pose.root_pos,device=env.device)
+        expected=torch.tensor(getattr(cfg.pose,args.seed_pose).root_pos,device=env.device)
         root_error=(robot.data.root_pos_w-env.scene.env_origins-expected).abs().max().item()
-        expected_quat=np.array(cfg.pose.root_quat); expected_quat/=np.linalg.norm(expected_quat)
+        expected_quat=np.array(getattr(cfg.pose,args.seed_pose).root_quat); expected_quat/=np.linalg.norm(expected_quat)
         quat_error=float(np.minimum(np.linalg.norm(root[:,3:7]-expected_quat,axis=-1),np.linalg.norm(root[:,3:7]+expected_quat,axis=-1)).max())
         result={'label':label,'finite':bool(np.isfinite(root).all() and np.isfinite(q).all()),
                 'joint_limit_violation_rad':float(np.maximum(limits[:,:,0]-q,q-limits[:,:,1]).clip(0).max()),

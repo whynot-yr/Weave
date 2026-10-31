@@ -34,7 +34,7 @@ class ObservationsCfg:
 
 @configclass
 class EventsCfg:
-    reset = EventTermCfg(func=mdp.reset_supine, mode='reset')
+    reset = EventTermCfg(func=mdp.reset_getup, mode='reset')
 
 
 @configclass

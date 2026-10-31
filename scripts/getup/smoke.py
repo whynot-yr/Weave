@@ -18,7 +18,7 @@ from g1_hoi_learning.tasks.getup.env_cfg import GetupEnvCfg
 from g1_hoi_learning.algorithms.ppo.multi_critic_networks import MultiCriticSimBaActorCritic
 from g1_hoi_learning.algorithms.ppo.multi_critic_algorithm import MultiCriticMuonPPO
 from g1_hoi_learning.tasks.getup.agents.rsl_rl_ppo_cfg import GetupRunnerCfg
-from rsl_rl.runners import OnPolicyRunner
+from g1_hoi_learning.tasks.getup.runner import GetupOnPolicyRunner as OnPolicyRunner
 
 
 def main():
@@ -31,15 +31,19 @@ def main():
     raw = GetupEnv(cfg)
     env = RslRlVecEnvWrapper(raw)
     obs, _ = env.reset()
+    # Exercise both seeds deterministically, then restore the real mixed sampler.
+    for i, name in enumerate(('supine', 'prone')):
+        cfg.pose.reset_mode = name
+        raw._reset_idx(torch.tensor([i], device=env.device))
+    cfg.pose.reset_mode = 'mixed'
+    obs = env.get_observations()
     assert obs['robot_proprio'].shape == (2, 462)
     assert torch.allclose(obs['robot_proprio'][:, :154], obs['robot_proprio'][:, 154:308])
     robot = raw.scene['robot']
     state = raw.getup_state
-    expected_root = torch.tensor(cfg.pose.root_pos, device=env.device).expand(2, -1)
+    expected_root = state.seed_root_pos[state.episode_seed_id]
     torch.testing.assert_close(robot.data.root_pos_w-raw.scene.env_origins, expected_root)
-    expected_seed = torch.tensor(
-        [cfg.pose.seed_joint_pos[robot.joint_names[i]] for i in state.drive], device=env.device,
-    ).expand(2, -1)
+    expected_seed = state.seed_joint_pos[state.episode_seed_id]
     torch.testing.assert_close(robot.data.joint_pos[:, state.drive], expected_seed)
     assert not torch.allclose(robot.data.default_joint_pos[:, state.drive], expected_seed)
     torch.testing.assert_close(state.action._offset, robot.data.default_joint_pos[:, state.drive])

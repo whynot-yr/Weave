@@ -8,7 +8,7 @@ from pathlib import Path
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--pose", choices=["standing", "supine"], default="standing")
+parser.add_argument("--pose", choices=["standing", "supine", "prone"], default="standing")
 parser.add_argument("--root-height", type=float, default=None)
 parser.add_argument("--head-offset", type=float, nargs=3, default=None)
 parser.add_argument("--pose-json", type=Path, help="Optional root_pos/root_quat_wxyz/joint_pos overrides")
@@ -68,10 +68,10 @@ def main():
     robot = scene["robot"]
     root = robot.data.default_root_state.clone()
     q = robot.data.default_joint_pos.clone()
-    # Supine uses the approved training seed; standing uses WEAVE defaults.
+    # Named poses use approved seeds; standing uses WEAVE defaults.
     # CLI/JSON overrides are local to this diagnostic scene.
-    if args.pose == "supine":
-        pose_cfg = GetupPoseCfg()
+    if args.pose in ("supine", "prone"):
+        pose_cfg = getattr(GetupPoseCfg(), args.pose)
         root[:, :3] = torch.tensor(pose_cfg.root_pos, device=sim.device)
         root[:, 3:7] = torch.tensor(pose_cfg.root_quat, device=sim.device)
         for name, value in pose_cfg.seed_joint_pos.items():

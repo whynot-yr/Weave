@@ -26,7 +26,8 @@ def main():
     a.output.mkdir(parents=True,exist_ok=False)
     torch.set_num_threads(4)
     cfg=GetupEnvCfg();cfg.scene.num_envs=16;cfg.sim.device=a.device
-    cfg.pose.root_pos=(0.,0.,a.root_height);cfg.pose.randomize_joints=False
+    cfg.pose.reset_mode='supine'
+    cfg.pose.supine.root_pos=(0.,0.,a.root_height);cfg.pose.randomize_joints=False
     cfg.scene.audit_contacts=ContactSensorCfg(prim_path='{ENV_REGEX_NS}/Robot/.*',history_length=4)
     env=GetupEnv(cfg);env.reset();s=env.getup_state;r=s.robot;names=r.joint_names
     ids=torch.arange(env.num_envs,device=env.device)

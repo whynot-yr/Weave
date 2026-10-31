@@ -12,14 +12,26 @@ class GetupState:
         if self.robot.num_joints != 53 or len(self.drive) != 41:
             raise ValueError('Getup expects 53 state joints and 41 actions')
         drive_names = [self.robot.joint_names[i] for i in self.drive]
-        if set(env.cfg.pose.seed_joint_pos) != set(drive_names):
-            raise ValueError('Supine seed must specify exactly the 41 active joint names')
-        self.seed_joint_pos = torch.tensor(
-            [env.cfg.pose.seed_joint_pos[name] for name in drive_names],
-            dtype=self.robot.data.default_joint_pos.dtype, device=env.device,
-        )
-        if not torch.isfinite(self.seed_joint_pos).all():
-            raise ValueError('Supine seed joint angles must be finite')
+        self.seed_names = ('supine', 'prone')
+        seeds = [getattr(env.cfg.pose, name) for name in self.seed_names]
+        for name, seed in zip(self.seed_names, seeds):
+            if set(seed.seed_joint_pos) != set(drive_names):
+                raise ValueError(f'{name} seed must specify exactly the 41 active joint names')
+        def tensor(values):
+            return torch.tensor(values, dtype=self.robot.data.default_joint_pos.dtype, device=env.device)
+        self.seed_joint_pos = tensor([[seed.seed_joint_pos[name] for name in drive_names] for seed in seeds])
+        self.seed_root_pos = tensor([seed.root_pos for seed in seeds])
+        self.seed_root_quat = tensor([seed.root_quat for seed in seeds])
+        if not all(torch.isfinite(x).all() for x in (self.seed_joint_pos, self.seed_root_pos, self.seed_root_quat)):
+            raise ValueError('Seed poses must be finite')
+        norms = self.seed_root_quat.norm(dim=-1, keepdim=True)
+        if (norms < 1e-6).any():
+            raise ValueError('Seed quaternion must be nonzero')
+        self.seed_root_quat /= norms
+        self.episode_seed_id = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+        # Per-seed additive statistics: resets, episodes, success, final hold,
+        # episode steps, then task/style/regu/post returns. Reduced at PPO update boundaries.
+        self.seed_stats = torch.zeros(2, 9, dtype=torch.float64, device=env.device)
         self.history = torch.zeros(env.num_envs, 3, 154, device=env.device)
         self.pending = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         self.previous_velocity = torch.zeros(env.num_envs, 41, device=env.device)

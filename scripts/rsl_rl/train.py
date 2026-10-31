@@ -206,7 +206,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create runner from rsl-rl
     if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        runner_class = OnPolicyRunner
+        from g1_hoi_learning.tasks.getup.env import GetupEnv
+        if isinstance(env.unwrapped, GetupEnv):
+            from g1_hoi_learning.tasks.getup.runner import GetupOnPolicyRunner
+            runner_class = GetupOnPolicyRunner
+        runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
