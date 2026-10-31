@@ -11,7 +11,7 @@ WEIGHTS = {
     'style_knee': -.25, 'style_shoulder_roll': -2.5,
     'style_left_foot': 2.5, 'style_right_foot': 2.5, 'style_feet_distance': -10.,
     'style_stumble': 0., 'style_shank': 10., 'style_ang_vel': 1.,
-    'regu_acc': -2.5e-7, 'regu_action_rate': -.01, 'regu_smoothness': -.01,
+    'regu_acc': -2.5e-7, 'regu_action_rate': -.1, 'regu_smoothness': -.01,
     'regu_torque': -2.5e-6, 'regu_power': -2.5e-5, 'regu_vel': -1e-3,
     'regu_tracking': -.00025, 'regu_pos_limits': -100., 'regu_vel_limits': -1.,
     'post_ang_vel': 10., 'post_lin_vel': 10., 'post_orientation': 10.,
