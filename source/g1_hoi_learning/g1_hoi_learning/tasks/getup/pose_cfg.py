@@ -117,6 +117,6 @@ class GetupPoseCfg:
     style_height_gate: float = 0.45  # HoST ground candidate
     post_height_gate: float = 0.65  # HoST ground candidate; independent of success
     standing_height_target: float = 0.75  # HoST ground candidate
-    success_height: float = 0.76
+    success_height: float = 0.75
     success_hold_s: float = 1.0
     calibration_verified: bool = False
