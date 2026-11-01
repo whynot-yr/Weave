@@ -106,6 +106,24 @@ task only. Play uses the existing `scripts/rsl_rl/play.py` with this task ID and
 the getup checkpoint. Exported actor input is 462D; the caller must maintain the
 same history order and default-offset action mapping.
 
+## Evaluation with fixed fingers
+
+Add `--finger-control fixed` to `scripts/getup/eval.py` to override the 12 active
+finger actions throughout every episode. All active finger position targets are
+zero radians; the existing mimic mapping supplies the other 12 finger targets.
+Shoulder, elbow, wrist, waist and leg actions remain policy-controlled. The
+default `--finger-control policy` preserves normal policy execution.
+
+The override preserves the 41-dimensional action interface, converts zero-angle
+targets using runtime scale/offset, and rejects incompatible clipping or hard
+limits. It fixes targets, not physical joint positions, and can change hand
+contacts and subsequent policy observations during getting up.
+
+Evaluation NPZ files also contain `policy_actions` (before override/clipping) and
+`executed_actions` (action-manager input after wrapper clipping, before target
+scale/offset), aligned with `control_time_s`. `metadata.json` records the control
+mode, action joint ordering, and fixed finger targets when enabled.
+
 ## Single-critic validation
 
 Seven CPU regression tests pass, covering scalar GAE, critic gradients, terminal

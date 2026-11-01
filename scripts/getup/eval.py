@@ -18,6 +18,8 @@ parser.add_argument('--output', type=Path, required=True, help='New output direc
 parser.add_argument('--video', action='store_true')
 parser.add_argument('--torque-audit', action='store_true', help='Capture solver efforts and export per-episode torque audits.')
 parser.add_argument('--plots', action='store_true', help='Save plots of all joint positions/velocities and pelvis height.')
+parser.add_argument('--finger-control', choices=['policy', 'fixed'], default='policy',
+                    help='fixed: hold all finger position targets at zero radians throughout evaluation.')
 parser.add_argument('--position_tolerance', type=float, default=1e-4, help='Radians; raw excess is always retained.')
 parser.add_argument('--velocity_tolerance', type=float, default=1e-3, help='Radians/second.')
 cli_args.add_rsl_rl_args(parser)
@@ -46,6 +48,7 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 import g1_hoi_learning.tasks  # registers Getup and custom RSL-RL classes
 from rollout_recorder import JointRolloutRecorder
+from finger_control import FixedFingerControl
 
 
 @configclass
@@ -88,6 +91,8 @@ def main(env_cfg, agent_cfg):
         obs, _ = env.reset()
         runner.alg.policy.reset()
         raw = env.unwrapped
+        finger_control = (FixedFingerControl(raw.action_manager.get_term('joint_pos'), raw.scene['robot'],
+                                            env.clip_actions) if args.finger_control == 'fixed' else None)
         recorder = raw.getup_eval_recorder
         recorder.start(output, args.episodes, args.position_tolerance, args.velocity_tolerance, args.plots, args.torque_audit)
         metadata = dict(checkpoint=str(Path(checkpoint).resolve()), seed=env_cfg.seed,
@@ -104,6 +109,12 @@ def main(env_cfg, agent_cfg):
                                'Torque estimates are not measured PhysX constraint/contact torques.',
                                'Exceedance durations are sample_count * physics_dt, not continuous-time proofs.',
                                'Soft-position violations and target violations do not imply actual hard-limit violations.'])
+        metadata.update(finger_control.metadata if finger_control else dict(finger_control='policy'))
+        metadata['action_recording'] = dict(
+            policy_actions='Raw policy output before finger override and wrapper clipping.',
+            executed_actions='Action-manager input after override and wrapper clipping, before target scale/offset.',
+            action_joint_names=list(raw.action_manager.get_term('joint_pos')._joint_names),
+            wrapper_clip_actions=env.clip_actions)
         (output/'metadata.json').write_text(json.dumps(metadata, indent=2))
         if video:
             video.start_recording('eval')
@@ -113,7 +124,10 @@ def main(env_cfg, agent_cfg):
             for step in range(maximum_steps):
                 if not app.is_running() or recorder.done:
                     break
-                obs, _, dones, _ = env.step(policy(obs))
+                policy_actions = policy(obs)
+                actions = finger_control.apply(policy_actions) if finger_control else policy_actions
+                recorder.record_policy_actions(policy_actions)
+                obs, _, dones, _ = env.step(actions)
                 runner.alg.policy.reset(dones)
                 if (step+1) % 50 == 0:
                     print(f'[PROGRESS] control_steps={step+1} completed={sum(recorder.completed)}/{args.episodes}', flush=True)

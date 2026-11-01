@@ -25,6 +25,8 @@ class JointRolloutRecorder(RecorderTerm):
         self.completed = [0]*self._env.num_envs
         self.physics = [[] for _ in self.quotas]
         self.control = [[] for _ in self.quotas]
+        self.action_records = [[] for _ in self.quotas]
+        self.pending_policy_actions = None
         self.results, self.summary = [], []
         self.position_tolerance, self.velocity_tolerance = position_tolerance, velocity_tolerance
         self.plots = plots
@@ -50,6 +52,10 @@ class JointRolloutRecorder(RecorderTerm):
     @property
     def done(self):
         return self.completed == self.quotas
+
+    def record_policy_actions(self, actions):
+        """Snapshot before env.step; executed actions are read before automatic reset."""
+        self.pending_policy_actions = actions.detach().cpu().numpy().copy()
 
     def record_post_physics_decimation_step(self):
         if not self.enabled or self.done:
@@ -91,14 +97,18 @@ class JointRolloutRecorder(RecorderTerm):
             return None, None
         # ManagerBasedRLEnv calls this after reward/success computation, before auto-reset.
         s = self._env.getup_state
+        executed = self._env.action_manager.action.detach().cpu().numpy().copy()
         for i, quota in enumerate(self.quotas):
             if self.completed[i] >= quota:
                 continue
             self.control[i].append((int(s.success_steps[i]), bool(s.success[i])))
+            if self.pending_policy_actions is not None:
+                self.action_records[i].append((self.pending_policy_actions[i].copy(), executed[i].copy()))
             if self._env.reset_buf[i]:
                 causes = [name for name in self._env.termination_manager.active_terms
                           if self._env.termination_manager.get_term(name)[i]]
                 self._save(i, True, bool(s.success[i]), int(s.success_steps[i]), causes)
+        self.pending_policy_actions = None
         return None, None
 
     def record_post_reset(self, env_ids):
@@ -123,6 +133,11 @@ class JointRolloutRecorder(RecorderTerm):
                     initial_joint_pos=self.initial_q[i].copy(), initial_joint_vel=self.initial_v[i].copy(),
                     initial_root_state_w=self.initial_root[i].copy())
         limits = {k: v[i] for k, v in self.limits.items()}
+        if self.action_records[i]:
+            if len(self.action_records[i]) != len(controls):
+                raise RuntimeError('Action records must align with control_time_s')
+            data['policy_actions'] = np.stack([row[0] for row in self.action_records[i]])
+            data['executed_actions'] = np.stack([row[1] for row in self.action_records[i]])
         np.savez_compressed(self.output/f'{stem}.npz', **data,
                             **{f'limit_{k}': v for k, v in limits.items()})
         rows = joint_summary(data, self.names, limits, self.dt, self.position_tolerance, self.velocity_tolerance)
@@ -138,6 +153,7 @@ class JointRolloutRecorder(RecorderTerm):
         write_csv(self.output/'episodes.csv', self.results)
         print('[EPISODE]', json.dumps(self.results[-1]), flush=True)
         self.physics[i], self.control[i] = [], []
+        self.action_records[i] = []
         self.completed[i] += 1
 
     def finish(self):
