@@ -22,7 +22,7 @@ parser.add_argument('--position_tolerance', type=float, default=1e-4, help='Radi
 parser.add_argument('--velocity_tolerance', type=float, default=1e-3, help='Radians/second.')
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
-parser.set_defaults(headless=True)
+parser.set_defaults(headless=False)
 args, hydra_args = parser.parse_known_args()
 if args.episodes < args.num_envs or args.num_envs < 1:
     parser.error('Require episodes >= num_envs >= 1')
