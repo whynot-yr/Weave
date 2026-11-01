@@ -37,10 +37,13 @@ def main():
         raw._reset_idx(torch.tensor([i], device=env.device))
     cfg.pose.reset_mode = 'mixed'
     obs = env.get_observations()
-    assert obs['robot_proprio'].shape == (2, 462)
-    assert torch.allclose(obs['robot_proprio'][:, :154], obs['robot_proprio'][:, 154:308])
+    assert obs['robot_proprio'].shape == (2, 426)
+    assert torch.allclose(obs['robot_proprio'][:, :142], obs['robot_proprio'][:, 142:284])
     robot = raw.scene['robot']
     state = raw.getup_state
+    assert state.num_actions == env.num_actions == 29
+    assert state.frame_dim == 142
+    assert torch.count_nonzero(robot.data.joint_pos[:, state.action.finger_joint_ids]) == 0
     expected_root = state.seed_root_pos[state.episode_seed_id]
     torch.testing.assert_close(robot.data.root_pos_w-raw.scene.env_origins, expected_root)
     expected_seed = state.seed_joint_pos[state.episode_seed_id]
@@ -48,9 +51,16 @@ def main():
     assert not torch.allclose(robot.data.default_joint_pos[:, state.drive], expected_seed)
     torch.testing.assert_close(state.action._offset, robot.data.default_joint_pos[:, state.drive])
     assert torch.count_nonzero(robot.data.joint_vel) == 0
+    # Randomized partial reset affects only the selected environment and never randomizes fingers.
+    before_q = robot.data.joint_pos[1].clone()
+    cfg.pose.randomize_joints = True
+    raw._reset_idx(torch.tensor([0], device=env.device))
+    torch.testing.assert_close(robot.data.joint_pos[1], before_q)
+    assert torch.count_nonzero(robot.data.joint_pos[:, state.action.finger_joint_ids]) == 0
+    obs = env.get_observations()
     # Smaller width only for this integration test; training config remains WEAVE 2048.
     policy = MultiCriticSimBaActorCritic(
-        obs, {'policy': ['robot_proprio'], 'critic': ['robot_proprio']}, 41,
+        obs, {'policy': ['robot_proprio'], 'critic': ['robot_proprio']}, 29,
         actor_hidden_dim=32, critic_hidden_dim=32, actor_num_blocks=2, critic_num_blocks=2,
         expansion=1, latent_dim=16, encoder_hidden_dims={'robot_proprio': {'type':'mlp', 'hidden_dims':[32]}},
         init_noise_std=.8, compile=False,
@@ -58,7 +68,7 @@ def main():
     alg = MultiCriticMuonPPO(policy, device=env.device, num_learning_epochs=1, num_mini_batches=1,
                             entropy_coef=.01, normalize_advantage_per_mini_batch=False)
     assert policy.evaluate(obs).shape == (2, 1)
-    alg.init_storage('rl', 2, 2, obs, [41])
+    alg.init_storage('rl', 2, 2, obs, [29])
     assert alg.storage.values.shape == (2, 2, 1)
     with torch.inference_mode():
         for i in range(2):
@@ -66,11 +76,13 @@ def main():
             if i == 1:
                 raw.episode_length_buf[0] = raw.max_episode_length-1
             obs, reward, done, extras = env.step(action)
+            assert action.shape == (2, 29)
+            assert torch.count_nonzero(robot.data.joint_pos_target[:, state.action.finger_joint_ids]) == 0
             assert extras['reward_groups'].shape == (2,4)
             assert torch.isfinite(extras['reward_groups']).all()
             if i == 1:
                 assert done[0] and extras['bootstrap_timeouts'][0]
-                reset_hist = obs['robot_proprio'][0].reshape(3,154)
+                reset_hist = obs['robot_proprio'][0].reshape(3,142)
                 assert torch.equal(reset_hist[0], reset_hist[1])
                 assert not torch.equal(extras['terminal_proprio'][0], obs['robot_proprio'][0])
             alg.process_env_step(obs, reward, done, extras)
@@ -96,7 +108,9 @@ def main():
     before = runner.get_inference_policy()(probe).detach().clone()
     runner.load(checkpoint)
     torch.testing.assert_close(before, runner.get_inference_policy()(probe))
-    (path/'result.json').write_text(json.dumps({'passed':True, 'metrics':metrics}, indent=2))
+    assert before.shape == (2, 29)
+    (path/'result.json').write_text(json.dumps(
+        {'passed':True, 'action_dim':29, 'observation_dim':426, 'metrics':metrics}, indent=2))
     print('[GETUP SMOKE] PASSED', metrics, flush=True)
     faulthandler.cancel_dump_traceback_later()
     env.close()

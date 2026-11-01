@@ -25,20 +25,13 @@ def reset_getup(env, env_ids):
     q = robot.data.default_joint_pos[env_ids].clone()
     q[:, state.drive] = state.seed_joint_pos[seed_ids]
     limits = robot.data.joint_pos_limits[env_ids].clone()
-    mimic = state.action.cfg.mimic
-    for name, (driver, multiplier, offset) in mimic.items():
-        j, d = state.joint_ids[name], state.joint_ids[driver]
-        bounds = (limits[:, j]-offset)/multiplier
-        limits[:, d, 0] = torch.maximum(limits[:, d, 0], bounds.min(-1).values)
-        limits[:, d, 1] = torch.minimum(limits[:, d, 1], bounds.max(-1).values)
     if cfg.randomize_joints:
         lo, hi = cfg.joint_scale_range
         ol, oh = cfg.joint_offset_range
-        q[:, state.drive] = q[:, state.drive]*(lo+(hi-lo)*torch.rand(n, 41, device=env.device)) \
-            + ol+(oh-ol)*torch.rand(n, 41, device=env.device)
+        q[:, state.drive] = q[:, state.drive]*(lo+(hi-lo)*torch.rand(n, state.num_actions, device=env.device)) \
+            + ol+(oh-ol)*torch.rand(n, state.num_actions, device=env.device)
     q[:, state.drive] = q[:, state.drive].clamp(limits[:, state.drive, 0], limits[:, state.drive, 1])
-    for name, (driver, multiplier, offset) in mimic.items():
-        q[:, state.joint_ids[name]] = q[:, state.joint_ids[driver]]*multiplier+offset
+    q[:, state.action.finger_joint_ids] = state.action.fixed_finger_targets[env_ids]
     robot.write_root_pose_to_sim(root[:, :7], env_ids=env_ids)
     robot.write_root_velocity_to_sim(root[:, 7:], env_ids=env_ids)
     robot.write_joint_state_to_sim(q, torch.zeros_like(q), env_ids=env_ids)

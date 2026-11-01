@@ -9,14 +9,17 @@ class GetupState:
         self.robot = env.scene['robot']
         self.action = env.action_manager.get_term('joint_pos')
         self.drive = list(self.action._joint_ids)
-        if self.robot.num_joints != 53 or len(self.drive) != 41:
-            raise ValueError('Getup expects 53 state joints and 41 actions')
+        self.num_actions = len(self.drive)
+        if self.robot.num_joints != 53 or self.num_actions != 29:
+            raise ValueError('Getup expects 53 state joints and 29 body actions')
         drive_names = [self.robot.joint_names[i] for i in self.drive]
         self.seed_names = ('supine', 'prone')
         seeds = [getattr(env.cfg.pose, name) for name in self.seed_names]
         for name, seed in zip(self.seed_names, seeds):
-            if set(seed.seed_joint_pos) != set(drive_names):
-                raise ValueError(f'{name} seed must specify exactly the 41 active joint names')
+            if set(seed.seed_joint_pos) != set(drive_names) | set(self.action.finger_driver_names):
+                raise ValueError(f'{name} seed must specify the 29 body and 12 active finger joints')
+            if any(seed.seed_joint_pos[n] != 0. for n in self.action.finger_driver_names):
+                raise ValueError(f'{name} finger seed must match the fixed zero targets')
         def tensor(values):
             return torch.tensor(values, dtype=self.robot.data.default_joint_pos.dtype, device=env.device)
         self.seed_joint_pos = tensor([[seed.seed_joint_pos[name] for name in drive_names] for seed in seeds])
@@ -32,9 +35,10 @@ class GetupState:
         # Per-seed additive statistics: resets, episodes, success, final hold,
         # episode steps, then task/style/regu/post returns. Reduced at PPO update boundaries.
         self.seed_stats = torch.zeros(2, 9, dtype=torch.float64, device=env.device)
-        self.history = torch.zeros(env.num_envs, 3, 154, device=env.device)
+        self.frame_dim = 3 + 3 + 2 * self.robot.num_joints + 1 + self.num_actions
+        self.history = torch.zeros(env.num_envs, 3, self.frame_dim, device=env.device)
         self.pending = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
-        self.previous_velocity = torch.zeros(env.num_envs, 41, device=env.device)
+        self.previous_velocity = torch.zeros(env.num_envs, self.num_actions, device=env.device)
         self.previous_action = torch.zeros_like(self.previous_velocity)
         self.previous_previous_action = torch.zeros_like(self.previous_velocity)
         self.success_steps = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)

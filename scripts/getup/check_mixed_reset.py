@@ -16,7 +16,7 @@ def main():
  geom=ImportedGeometry('/tmp/IsaacLab/usd_20261030_215206_1884/g1_29dof_rev_1_0_with_inspire_hand_DFQ.usd',G1_INSPIRE_URDF_PATH)
  result={};grav=[]
  def check():
-  obs=env.observation_manager.compute()['robot_proprio'].reshape(16,3,154)
+  obs=env.observation_manager.compute()['robot_proprio'].reshape(16,3,s.frame_dim)
   assert torch.equal(obs[:,0],obs[:,1]) and torch.equal(obs[:,1],obs[:,2])
   assert (env.action_manager.action==0).all() and (r.data.joint_vel==0).all()
   assert (r.data.root_state_w[:,7:]==0).all()
@@ -66,7 +66,7 @@ def main():
  torch.testing.assert_close(stats[:,1:5],torch.tensor([[1.,1.,1.,3.],[1.,0.,0.,7.]],dtype=stats.dtype,device=env.device))
  torch.testing.assert_close(stats[:,5:],torch.tensor([[1.,2.,3.,4.],[10.,20.,30.,40.]],dtype=stats.dtype,device=env.device))
  env._reset_idx(ids[:2]);assert env.pop_seed_statistics()[:,1:].count_nonzero()==0
- result.update(partial_reset_passed=True,reproducibility_passed=True,old_seed_attribution_passed=True,observations=462)
+ result.update(partial_reset_passed=True,reproducibility_passed=True,old_seed_attribution_passed=True,observations=3*s.frame_dim)
  (a.output/'result.json').write_text(json.dumps(result,indent=2));env.close();print('[MIXED CHECK] PASSED',result,flush=True)
 try:main()
 except Exception:

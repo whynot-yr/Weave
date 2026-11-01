@@ -89,7 +89,7 @@ def main():
         mimic_error=0.
         for name,(driver,m,b) in state.action.cfg.mimic.items():
             mimic_error=max(mimic_error,float(np.abs(q[:,state.joint_ids[name]]-q[:,state.joint_ids[driver]]*m-b).max()))
-        obs=env.observation_manager.compute()['robot_proprio'].reshape(env.num_envs,3,154)
+        obs=env.observation_manager.compute()['robot_proprio'].reshape(env.num_envs,3,state.frame_dim)
         expected=torch.tensor(getattr(cfg.pose,args.seed_pose).root_pos,device=env.device)
         root_error=(robot.data.root_pos_w-env.scene.env_origins-expected).abs().max().item()
         expected_quat=np.array(getattr(cfg.pose,args.seed_pose).root_quat); expected_quat/=np.linalg.norm(expected_quat)
@@ -164,7 +164,7 @@ def main():
                 env.reset()
                 initial_root,initial_q=snapshot()
                 np.savez(args.output/f'{label}_initial.npz',root=initial_root,q=initial_q)
-                action=torch.zeros(env.num_envs,41,device=env.device)
+                action=torch.zeros(env.num_envs,state.num_actions,device=env.device)
                 if mode=='hold_reset': action=robot.data.joint_pos[:,state.drive]-robot.data.default_joint_pos[:,state.drive]
                 rows=[];started=time.perf_counter()
                 for step in range(round(args.seconds/env.step_dt)):

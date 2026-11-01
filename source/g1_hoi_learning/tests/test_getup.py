@@ -35,7 +35,7 @@ def modules(monkeypatch):
 def test_scalar_gae_and_weights(modules):
     obs, policy = make_policy(modules)
     alg = modules.algorithm.MultiCriticMuonPPO(policy, device='cpu')
-    alg.init_storage('rl', 2, 2, obs, [41])
+    alg.init_storage('rl', 2, 2, obs, [29])
     from rsl_rl.storage import RolloutStorage
     storage = alg.storage
     assert type(storage) is RolloutStorage
@@ -53,9 +53,9 @@ def test_scalar_gae_and_weights(modules):
 
 
 def make_policy(modules):
-    obs = TensorDict({'robot_proprio': torch.randn(2,462)}, batch_size=[2])
+    obs = TensorDict({'robot_proprio': torch.randn(2,426)}, batch_size=[2])
     policy = modules.network.MultiCriticSimBaActorCritic(
-        obs, {'policy':['robot_proprio'], 'critic':['robot_proprio']}, 41, compile=False,
+        obs, {'policy':['robot_proprio'], 'critic':['robot_proprio']}, 29, compile=False,
         actor_hidden_dim=16, critic_hidden_dim=16, latent_dim=8,
         encoder_hidden_dims={'robot_proprio':{'type':'mlp','hidden_dims':[16]}},
         actor_obs_normalization=False, critic_obs_normalization=False,
@@ -74,9 +74,9 @@ def test_single_critic_has_independent_gradients(modules):
 def test_timeout_uses_terminal_value_only(modules):
     obs, policy = make_policy(modules)
     alg = modules.algorithm.MultiCriticMuonPPO(policy, device='cpu', gamma=.9)
-    alg.init_storage('rl', 2, 1, obs, [41])
+    alg.init_storage('rl', 2, 1, obs, [29])
     alg.act(obs)
-    terminal = TensorDict({'robot_proprio': torch.full((2,462), .75)}, batch_size=[2])
+    terminal = TensorDict({'robot_proprio': torch.full((2,426), .75)}, batch_size=[2])
     expected = policy.evaluate(terminal).detach()
     rewards = torch.tensor([3., 7.])
     alg.process_env_step(obs, rewards, torch.ones(2), {
@@ -93,7 +93,7 @@ def test_single_critic_ppo_update_and_restore(modules):
         policy, device='cpu', num_learning_epochs=1, num_mini_batches=1,
         normalize_advantage_per_mini_batch=False,
     )
-    alg.init_storage('rl', 2, 2, obs, [41])
+    alg.init_storage('rl', 2, 2, obs, [29])
     before = [p.detach().clone() for p in policy.critic.parameters()]
     with torch.inference_mode():
         for step in range(2):
@@ -118,13 +118,13 @@ def test_history_and_continuous_success():
     spec.loader.exec_module(mod)
     s = mod.GetupState.__new__(mod.GetupState)
     s.env = SimpleNamespace(common_step_counter=0, cfg=SimpleNamespace(pose=SimpleNamespace(success_height=.76)))
-    s.history = torch.zeros(2,3,154)
+    s.history = torch.zeros(2,3,142)
     s.pending = torch.ones(2,dtype=torch.bool)
     s.success_steps = torch.zeros(2,dtype=torch.long)
     s.success = torch.zeros(2,dtype=torch.bool)
     s.required_steps = 50
     s.last_step = -1
-    frame = torch.zeros(2,154)
+    frame = torch.zeros(2,142)
     frame[:,112] = .8
     s.frame = lambda: frame
     for i in range(49):
@@ -141,7 +141,7 @@ def test_history_and_continuous_success():
     torch.testing.assert_close(before, s.history)
     s.pending[1] = True
     frame[1] = 3
-    result = s.observation().reshape(2,3,154)
+    result = s.observation().reshape(2,3,142)
     assert torch.equal(result[0], before[0])
     assert (result[1] == 3).all()
 
@@ -155,7 +155,7 @@ def test_group_time_scaling_and_terminal_snapshot():
         def num_envs(self): return 2
         @property
         def device(self): return 'cpu'
-    history = torch.randn(2,462)
+    history = torch.randn(2,426)
     state = SimpleNamespace(begin_step=lambda: None, end_step=lambda: None,
                             observation=lambda: history.clone())
     terms = {f'{g}_test': torch.full((2,), float(i+1))
@@ -183,9 +183,9 @@ def test_group_time_scaling_and_terminal_snapshot():
 
 
 def test_normalizer_checkpoint_after_inference_rollout(modules):
-    obs = TensorDict({'robot_proprio':torch.randn(2,462)},batch_size=[2])
+    obs = TensorDict({'robot_proprio':torch.randn(2,426)},batch_size=[2])
     policy = modules.network.MultiCriticSimBaActorCritic(
-        obs, {'policy':['robot_proprio'],'critic':['robot_proprio']},41,compile=False,
+        obs, {'policy':['robot_proprio'],'critic':['robot_proprio']},29,compile=False,
         actor_hidden_dim=16,critic_hidden_dim=16,latent_dim=8,
         encoder_hidden_dims={'robot_proprio':{'type':'mlp','hidden_dims':[16]}},
     )

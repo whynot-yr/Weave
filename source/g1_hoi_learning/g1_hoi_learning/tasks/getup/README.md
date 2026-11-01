@@ -1,30 +1,31 @@
 # WEAVE Getup V1
 
 Task ID: `G1-Inspire-Getup-v0`. Uses WEAVE's G1 Inspire URDF, implicit actuators,
-software mimic actions, SimBaV2 components, Muon/AdamW, and the installed RSL-RL
+fixed finger targets, SimBaV2 components, Muon/AdamW, and the installed RSL-RL
 `OnPolicyRunner`. The HOI task is unchanged. No motion files, objects, teacher,
 phase state machine, external pushes, or extra dynamics randomization are used.
 
 ## Configuration
 
 - Observation: `[base_ang_vel_b(3), projected_gravity_b(3), joint_pos_rel(53),
-  joint_vel_rel(53), pelvis_height(1), previous_action(41)]`.
-- Three frames including the current frame, oldest first: **462D**. Reset repeats
+  joint_vel_rel(53), pelvis_height(1), previous_action(29)]`.
+- Three frames including the current frame, oldest first: **426D**. Reset repeats
   the first frame. Actor and critic use the same noiseless observation group.
 - History is explicitly owned by `GetupState`, rather than ObservationManager's
   history. This allows terminal snapshots before auto-reset without advancing
   history twice during logging or observation queries.
-- Actor and one independent critic: MLP `462 -> 256 -> 256` (SiLU), WEAVE SimBa
+- Actor and one independent critic: MLP `426 -> 256 -> 256` (SiLU), WEAVE SimBa
   width 2048, two blocks, expansion 1. Critic output is `[N,1]`.
-- Action: 41D diagonal Gaussian, initial std 0.8. WEAVE's default offset and
+- Action: 29D diagonal Gaussian, initial std 0.8. WEAVE's default offset and
   scale 1.0 are retained. Reset does not change the default joint offsets.
-- Reset: root `(0,0,0.06)` plus environment origin, quaternion wxyz
-  `(sqrt(.5),0,-sqrt(.5),0)`, WEAVE default joint pose, zero velocities.
+- Reset: named supine/prone root and body seed poses from `pose_cfg.py`, plus
+  environment origin, with zero velocities.
   Driver positions use HoST `q_seed * U(.9,1.1) + U(-.1,.1)`, clipped to hard
-  limits including compatible mimic limits. Mimic positions derive from drivers.
+  limits for the 29 body joints. All 24 finger positions and targets start at zero,
+  without finger randomization. Their PD drives and collisions remain enabled.
 - 200 Hz physics, 50 Hz control, 10 s timeout. Joint velocity termination checks
   all 53 joints against 300 rad/s. Base speed termination uses 3D L2 norm >20 m/s.
-- Success: pelvis >0.76 m continuously for 50 control steps; interrupted streaks
+- Success: pelvis >0.74 m continuously for 50 control steps; interrupted streaks
   reset. Episode success latches until reset; no success termination.
 - Upper-body posture: 17 joints (waist + shoulders/elbows/wrists), no fingers.
 
@@ -106,31 +107,44 @@ task only. Play uses the existing `scripts/rsl_rl/play.py` with this task ID and
 the getup checkpoint. Exported actor input is 462D; the caller must maintain the
 same history order and default-offset action mapping.
 
-## Evaluation with fixed fingers
+## 29D control and evaluation
 
-Add `--finger-control fixed` to `scripts/getup/eval.py` to override the 12 active
-finger actions throughout every episode. All active finger position targets are
-zero radians; the existing mimic mapping supplies the other 12 finger targets.
-Shoulder, elbow, wrist, waist and leg actions remain policy-controlled. The
-default `--finger-control policy` preserves normal policy execution.
+The current task uses 29 policy-controlled body joints (including wrists), 24
+fixed finger targets, and 426D observations. All 53 physical joint positions and
+velocities remain observed and recorded. Body actions retain scale 1 and default
+joint offsets; finger targets are absolute zero radians, written every physics
+substep. Joint regularizers apply to the 29 body joints with unchanged weights.
 
-The override preserves the 41-dimensional action interface, converts zero-angle
-targets using runtime scale/offset, and rejects incompatible clipping or hard
-limits. It fixes targets, not physical joint positions, and can change hand
-contacts and subsequent policy observations during getting up.
+Start a fresh training run: old 41D-action / 462D-observation checkpoints and
+normalizers are incompatible. The task ID remains `G1-Inspire-Getup-v0`.
+No change is made to the HOI task or robot assets.
 
-Evaluation NPZ files also contain `policy_actions` (before override/clipping) and
-`executed_actions` (action-manager input after wrapper clipping, before target
-scale/offset), aligned with `control_time_s`. `metadata.json` records the control
-mode, action joint ordering, and fixed finger targets when enabled.
+`scripts/getup/eval.py` uses the environment's fixed fingers automatically.
+`--finger-control fixed` is accepted for command compatibility; the legacy
+`policy` value also leaves fingers fixed and prints a notice. The policy never
+outputs finger actions. Fixed targets do not physically lock the finger joints.
+
+Evaluation NPZ files contain 29D `policy_actions` (before wrapper clipping) and
+`executed_actions` (action-manager input after clipping, before scale/offset),
+aligned with `control_time_s`. All 53 joints remain in the physical diagnostics.
+`metadata.json` records action/observation dimensions, joint ordering and the
+24 fixed finger targets. Reset initializes fingers to zero, unlike the older
+41D evaluation override which retained randomized initial finger positions.
 
 ## Single-critic validation
 
-Seven CPU regression tests pass, covering scalar GAE, critic gradients, terminal
-bootstrap, PPO update and policy restore, history, reward time scaling, and
-normalizer checkpoint reload. Isaac Sim smoke was attempted but could not start
-because the current Python environment could not import `isaacsim`; simulation
-integration and training convergence have not been verified for this switch.
+The 29D migration passes 15 CPU regression checks across the Getup PPO/history,
+diagnostics and legacy finger-override tests. A two-environment Isaac Sim smoke
+checks named resets, randomized partial reset, fixed finger targets, scalar PPO
+update, native runner learning, and identical inference after save/load.
+The smoke uses reduced network width, not a full training run.
+
+A separate evaluation of its saved checkpoint completed four short episodes
+(0.2 seconds each), checking 29D action records and zero targets for all 24
+fingers at every recorded physics substep, including after episode resets.
+Artifacts: `outputs/getup_29d_smoke/result.json` and
+`outputs/getup_29d_eval_smoke/validation.json`. These are interface checks;
+training convergence and getup performance have not been established.
 
 ## Historical implementation checks (before the single-critic switch)
 

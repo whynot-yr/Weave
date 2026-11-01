@@ -6,10 +6,18 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from g1_hoi_learning.assets import GROUND_PLANE_USD_PATH
 from g1_hoi_learning.robots.g1_inspire import G1_INSPIRE_CFG
-from g1_hoi_learning.tasks.hoi.env_cfg import ActionsCfg
+from .mdp.actions import FixedFingerJointPositionActionCfg
 from .pose_cfg import GetupPoseCfg
 from . import mdp
 from .mdp.rewards import WEIGHTS
+
+
+@configclass
+class ActionsCfg:
+    joint_pos = FixedFingerJointPositionActionCfg(
+        asset_name='robot', joint_names=['left_.*_joint', 'right_.*_joint', 'waist_.*_joint'],
+        scale=1.0, use_default_offset=True,
+    )
 
 
 @configclass
