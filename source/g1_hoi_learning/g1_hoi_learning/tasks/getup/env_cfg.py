@@ -62,5 +62,7 @@ class GetupEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = .005
         self.sim.render_interval = 4
         self.sim.physx.gpu_max_rigid_patch_count = 16*2**16
+        # A string default allows Hydra to select asset_root tracking (None -> str is rejected).
+        self.viewer.asset_name = 'robot'
         self.viewer.eye = (2., 2., 1.5)
         self.viewer.lookat = (0., 0., .4)
